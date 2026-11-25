@@ -26,7 +26,8 @@ test('the human path prints a complete row and next steps', () => {
     assert.match(result.stdout, new RegExp(`    ${key}:`), `row is missing ${key}`)
   }
   assert.match(result.stdout, /Next steps/)
-  assert.match(result.stdout, /dsh plugin --profile/)
+  assert.match(result.stdout, /plugin_manager install_bundle/)
+  assert.match(result.stdout, /Settings → Plugins/)
   assert.match(result.stdout, /credential store/)
 })
 
