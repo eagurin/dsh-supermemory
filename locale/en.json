@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Supermemory",
-    "description": "Long-term memory for DeepSeek Harness: your own Supermemory namespace plus read-only recall from other agents, such as Hermes.",
+    "description": "Gives the agent long-term memory on a Supermemory server (v5 API), in its own namespace, and recalls relevant facts before a turn and captures the finished session after it. Tools appear as supermemory_* in the Tools list and the agent is told about its memory in the system prompt; existing data stays on the server when the bundle is turned off, it just stops being recalled or written. Needs a Supermemory server and the SUPERMEMORY_API_KEY credential; processing is asynchronous, so a saved document becomes searchable after the server finishes it. Other agents' namespaces (such as Hermes) are read-only and recalled as untrusted background; subagents neither recall nor capture by default.",
     "detail": "docs/DETAIL.md"
   }
 }

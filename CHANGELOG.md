@@ -4,6 +4,119 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-11-25
+
+Security and conformance release from four independent reviews (code, security, DSH
+plugin contract, stranger install). Several fixes are breaking; every one is listed
+below.
+
+### Security
+
+- **Recall can no longer forge its own block.** The block is delimited by a fresh
+  random nonce per turn instead of a fixed tag, and recalled facts and profile text
+  pass through `sanitizeUntrusted`, which removes control characters,
+  `</supermemory-context>` tokens and heading markers. Previously a document could
+  close the block and issue instructions as first-party user content.
+- **`supermemory_namespace action=context` was a cross-agent write hole.** It
+  PATCHed any namespace, including Hermes ones, bypassing the write policy. It now
+  goes through `resolveWriteContainer` and refuses another agent's namespace.
+- **Namespace deletion is an allowlist, not a denylist**, and `moveTo` is removed:
+  only a namespace this agent may write can be deleted, never its own.
+- **Uploads resist hard links and TOCTOU.** `realpathSync` cannot see a hard link,
+  so a link inside an allowed root used to reach any file on the volume; files with
+  more than one link are refused, the file is opened with `O_NOFOLLOW`, and read
+  through that descriptor with a byte cap.
+- **`supermemory_forget` is two-step**: it previews and deletes only with
+  `confirm: "delete"`. `dryRun` used to default to destructive.
+- **Captures are redacted** (`redactSecrets`, on by default): credential shapes are
+  replaced with `[redacted]` before a transcript reaches the server.
+- `writeContainers` refuses a Hermes name at config time, and
+  `allowWritesToReadContainers` no longer reaches `hermes*`.
+- HTTP redirects are refused (`redirect: 'error'`), a `baseUrl` with embedded
+  credentials is rejected, and a `moveTo`-style coerced name can no longer redirect
+  a write into `dsh`.
+- `check.mjs` now scans every text file in the package for secrets, including the
+  `sm_…` format this server actually uses, and fails on documentation drift.
+
+### Changed (breaking)
+
+- **Cross-agent reads are opt-in**: `readContainers` and `readPrefixes` default to
+  `[]`, and the shipped patch no longer enables Hermes reads. Add the override in
+  the README to recall another agent's memory.
+- The recall block markers are now `<<<supermemory-<nonce>>>` /
+  `<<<end-supermemory-<nonce>>>`; anything matching the old tag is not a delimiter.
+- `supermemory_namespace` no longer accepts `moveTo`, and deleting requires
+  `confirm`.
+- Tool definitions are converted to object-rooted JSON Schema at registration and
+  declared required arguments are validated before `execute`; previously the model
+  received a bare parameter map and nothing was validated.
+
+### Documentation and packaging
+
+- **English README.md** is the primary document, with a Russian mirror
+  (README.ru.md); both now show the canonical install path (`dsh plugin add`), the
+  credentials YAML shape, the real local-server commands (`npx supermemory local
+  install` then `start`), and the correct `engines.dsh` version.
+- The Plugin Manager detail page now follows the contract: `docs/DETAIL.md` is a
+  single feature image (`docs/preview.svg`), while the long document moved to
+  `docs/ARCHITECTURE.md`.
+- `meta.description` explains usage and limitations instead of one sentence.
+- `scripts/setup.mjs` prints the plan again on the human path (it referenced an
+  undefined variable, so every non-JSON invocation crashed) and is covered by tests.
+
+### Correctness and data integrity (from the code review)
+
+- **A compaction no longer destroys captured memory.** DSH represents compaction as a
+  `compact-checkpoint` user message that replaces the earlier messages on the
+  surface; the old transcript builder dropped it, so a post-compaction capture wrote
+  an assistant-only `turns: 0` document and deleted the parts that held the earlier
+  turns. The checkpoint is now kept as a labelled summary and switches the document
+  family (`…-c<hash>`), so older documents are never overwritten or deleted;
+  assistant-only traces are not captured at all.
+- **Capture content is stable**, so an unchanged turn no longer rewrites every
+  document (the header embedded a fresh timestamp into the hash, making each build
+  differ and re-trigger server processing).
+- **Overlapping captures are serialized per session**, which removes a race where an
+  older plan deleted the parts a newer plan had just written.
+- **Scheduled and team messages are captured as turns** (`schedule`,
+  `team-message`, `parent`), not silently skipped.
+- Permanent 4xx errors are no longer retried forever; only network, 408, 429 and 5xx
+  responses retry, and a 4xx logs a warning once.
+- Session state is released on `session/disposed`, so full session logs are not
+  pinned in memory for weeks.
+
+### Fixed (API and tools)
+
+- `supermemory_forget` reads the real response (`matches`, `count`, `errors`), so it
+  reports what happened; deleting by id now fails loudly when the server removed
+  nothing.
+- Ingest statuses (`extracting`, `chunking`, `embedding`, `indexing`) are reported
+  instead of "unknown", and a 404 right after a save keeps polling instead of
+  giving up.
+- API errors keep their structure (`details`, object `error`) instead of printing
+  `[object Object]`.
+- `supermemory_namespace` requires an explicit namespace and an explicit `context`
+  (a missing `context` used to clear the namespace), and deletion only covers the
+  writable allowlist.
+- `supermemory_buckets` recognises the agent's own namespace when it is passed
+  explicitly; writable namespaces are readable too; the filter validator enforces
+  the server's per-operator rules; profile buckets are included in profile facts;
+  uploads send `dreaming`.
+
+### Packaging
+
+- The default `baseUrl` matches the local server's own default (`127.0.0.1:8787`),
+  and the setup script probes both `8787` and `6767` before asking.
+- `captureRetryDelayMs` is configurable (tests and operators need a short delay).
+
+### Tests
+
+51 → 83 cases: nonce block and sanitization, redaction, JSON Schema conversion and
+required-argument validation, write-policy refusals, upload guards (symlink, hard
+link, size, disabled), two-step forget, strict list type, compaction family
+behaviour, stable hashing, overlapping captures, scheduled turns, 4xx retry policy,
+and CLI-level setup runs.
+
 ## [0.4.0] — 2026-11-25
 
 The remaining server capabilities: long sessions no longer lose their beginning,

@@ -1,6 +1,6 @@
 import { internals } from '../index.js'
 
-export const { resolveSettings, normalizeFilter, sanitizeContainer, isHermesContainer, containerLabel, mergeFacts, resultText, profileFacts, clampLines, messageText, lastUserMessage, buildTranscript, buildTranscriptSegments, buildTranscriptChunks, ingestText, writableContainers,
+export const { resolveSettings, normalizeFilter, sanitizeContainer, isHermesContainer, containerLabel, mergeFacts, resultText, profileFacts, clampLines, messageText, lastUserMessage, buildTranscriptSegments, buildTranscriptChunks, ingestText, writableContainers,
   isUploadAllowed, DEFAULTS, CONFIG_KEYS } = internals
 
 /** A message as the session stores it. */

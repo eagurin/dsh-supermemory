@@ -1,235 +1,216 @@
-# Supermemory для DeepSeek Harness
+# Supermemory for DeepSeek Harness
 
-Долговременная память на [Supermemory](https://supermemory.ai) (v5 API) с разделением по агентам: у DeepSeek Harness
-свой namespace, а память Гермеса доступна только на чтение. Это тот же сервер и тот же официальный API, которые
-использует официальный плагин `supermemoryai/hermes-supermemory` в Гермесе, поэтому накопленные там данные не нужно
-переносить или переиндексировать.
+Long-term memory for a [DeepSeek Harness](https://github.com/deepseek-ai) (DSH) agent, backed by a
+[Supermemory](https://supermemory.ai) server (v5 API): your own namespace for writing, optional
+read-only recall from other agents such as Hermes, automatic recall before a turn, and automatic
+capture of the finished session.
 
-> **Гермес и DeepSeek Harness — разные агенты.** Факты из `hermes_*` приходят в шаг с явной подписью «другой агент»,
-> никогда не выдаются за действия DeepSeek Harness, и плагин не пишет в namespace Гермеса.
+- **Own memory.** Everything the agent saves or captures goes to its own namespace (`dsh` by default).
+- **Optional cross-agent reads.** Other agents' namespaces can be listed as read-only; each recalled
+  fact is labelled with its container, and such content is delivered as untrusted background data.
+- **Recall before a turn.** The latest user question is searched before the first step and the
+  matching facts are injected in a per-turn, nonce-delimited block.
+- **Capture after a turn.** The session is upserted as one document (`dsh-<sessionId>`), or as
+  `dsh-<sessionId>-p1…pN` when it exceeds `maxCaptureChars`; parts update in place.
+- **Ten tools**: search, profile, save, forget, read_document, list, namespaces, upload_file,
+  namespace, buckets.
 
-## Что делает плагин
+## Requirements
 
-- **Своя память.** Всё, что агент сохраняет и захватывает, пишется в namespace `dsh` (настраивается).
-- **Чтение памяти Гермеса.** Namespace `hermes_default` и другие namespace с префиксом `hermes` доступны только на
-  чтение; каждый факт в recall и в результатах инструментов помечен контейнером и агентом-источником.
-- **Автоматический recall.** Перед первым шагом каждого хода последний вопрос пользователя ищется в своей и читаемых
-  namespace; найденные факты входят в шаг отдельным сообщением `<supermemory-context>` с пометкой «не инструкции,
-  чужой опыт».
-- **Автоматический capture.** После завершённого хода вся сессия перезаписывается как **один документ** на сессию
-  (`dsh-<sessionId>`), поэтому правки, compaction и повторные ходы не создают дубликатов. Документ обрабатывается
-  Supermemory асинхронно и постепенно превращается в memories и профиль.
-- **Инструменты.** Поиск, профиль, сохранение, забывание, чтение документа, список ресурсов, инвентарь namespace.
+| Need | Detail |
+|---|---|
+| DSH | `@deepseek-ai/dsh` `0.2.2-rc.1` or newer (`engines.dsh: >=0.2.2-0`). |
+| A Supermemory server | Either your own local server or Supermemory Cloud. |
+| An API key | Stored in the DSH credential store under `SUPERMEMORY_API_KEY`. |
+| Node | 22+ for the interactive setup script (`scripts/setup.mjs`). |
 
-## Установка
+### Choose a server first
 
-Нужен DSH `0.2.2` или новее и сервер Supermemory — **свой локальный** (`npx supermemory local` на `:6767`) либо
-**облако** `https://api.supermemory.ai`.
+| Option | Start it | Key |
+|---|---|---|
+| Local (recommended for privacy) | `npx supermemory local install` once, then `npx supermemory local start` (port 8787) | `cat ~/.supermemory/api-key` |
+| Cloud | nothing to run | create one in the Supermemory console |
 
-### Сначала выбери сервер
+The local server listens on `127.0.0.1:8787` by default (`PORT` or `--port` changes it; Hermes setups
+often run it on `6767`). The setup script probes both `8787` and `6767`, so it finds your server either way.
 
-Плагин сам сервер не выбирает за вас: у двух вариантов разные последствия, и это должно быть решением оператора.
-Скрипт настройки проверяет, поднят ли локальный сервер, и **спрашивает**, а не угадывает:
+Ask the setup script and it will probe the local server, ask which option you want, and print the
+complete configuration row:
 
 ```bash
-node scripts/setup.mjs              # спросит: local или cloud, проверит :6767, напечатает готовую строку
-node scripts/setup.mjs --mode cloud # то же без вопросов, для агента/скрипта
-node scripts/setup.mjs --json       # машинный план: mode, baseUrl, container, warnings, row
+node scripts/setup.mjs                 # interactive; needs a terminal
+node scripts/setup.mjs --mode local    # or --mode cloud, no prompts
+node scripts/setup.mjs --json          # machine-readable plan (exit 3 + needDecision on stderr if no server and no --mode)
 ```
 
-Что важно в его поведении:
+It never silently picks the cloud: with no local server it asks (or, in `--json` mode, returns
+`needDecision`). With the cloud server, captured transcripts leave your machine.
 
-- локальный сервер пробуется трижды (он перезапускается по расписанию, один неудачный запрос — ещё не «выключен»);
-- если локального сервера нет, скрипт **не** молча уходит в облако: в интерактивном режиме спрашивает, в `--json`
-  возвращает `needDecision` с двумя вариантами и код возврата 3;
-- без терминала (пайп, CI) вопросы не задаются, а запрашиваются флаги — иначе процесс тихо завершился бы;
-- для облака печатает предупреждение, что транскрипты сессий уезжают с машины.
+## Install
 
-| Вариант | Плюс | Минус |
-|---|---|---|
-| Локальный сервер | данные не покидают машину, тот же сервер, что у Гермеса | нужно держать процесс живым и следить за его хранилищем |
-| Облако | нечего администрировать | транскрипты сессий и вопросы уходят в Supermemory |
+The canonical path is DSH itself — it installs the bundle and applies the bundle's own
+`cordis.patch.yml`, so no profile row is needed:
 
-### Дальше
+```bash
+dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"
+```
 
-1. **Ключ** — в штатное хранилище DSH под ссылкой `SUPERMEMORY_API_KEY` (то же имя, что в официальном
-   Hermes-плагине). Значение в чат и в конфиг не попадает.
-2. **Плагин** — зависимость профиля из git-тега (или `link:` на время разработки):
+The same operation is available in the GUI: **Settings → Plugins → Install from URL**. After the
+install, the row appears in the profile automatically with local-server defaults.
 
-   ```bash
-   pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.3.0"
-   ```
+<details>
+<summary>Installing with pnpm or copying the row by hand (advanced)</summary>
 
-3. **Строка Loader'а** — вывод `node scripts/setup.mjs`. Оверрайд **заменяет конфиг целиком**, поэтому в строке
-   должны быть все ключи (скрипт печатает их все):
-
-   ```yaml
-   - id: supermemory
-     name: '@local/dsh-supermemory'
-     config:
-       baseUrl: http://127.0.0.1:6767
-       container: dsh
-       readContainers:
-         - hermes_default
-       readPrefixes:
-         - hermes
-       autoRecall: true
-       autoCapture: true
-       # … остальные ключи из вывода скрипта
-   ```
-
-4. **Перезапуск** приложения и проверка: `supermemory_namespaces`, затем `supermemory_search`.
-
-Имя пакета — `@local/dsh-supermemory` (так плагин называется с момента разработки; при переезде на установку из git
-имя сохраняется, чтобы не ломать живой профиль). Ключ API берётся из credential-ссылки `SUPERMEMORY_API_KEY` (сервис
-`ctx.credentials`, файл `$DSH_HOME/.credentials.yaml`) и резолвится заново на каждую операцию; переменная окружения с
-тем же именем работает как запасной источник.
-
-## Настройка
-
-| Поле | По умолчанию | Назначение |
-|---|---|---|
-| `baseUrl` | `http://localhost:6767` | Адрес Supermemory: локальный сервер или `https://api.supermemory.ai`. |
-| `apiKeyRef` | `SUPERMEMORY_API_KEY` | Имя credential-ссылки с ключом. |
-| `container` | `dsh` | Собственный namespace агента (единственный, куда идёт запись по умолчанию). |
-| `readContainers` | `[hermes_default]` | Namespace только для чтения. |
-| `readPrefixes` | `[hermes]` | Префиксы, по которым автоматически подхватываются другие профили Гермеса. |
-| `writeContainers` | `[]` | Дополнительные namespace, куда разрешена запись. |
-| `allowWritesToReadContainers` | `false` | Разрешить запись в читаемые namespace (по умолчанию Гермес защищён). |
-| `autoRecall` | `true` | Автоматический recall перед первым шагом хода. |
-| `autoCapture` | `true` | Автоматический захват завершённой сессии. |
-| `recallSubagents` | `false` | Давать ли recall субагентам. |
-| `captureSubagents` | `false` | Писать ли сессии субагентов в память. |
-| `maxRecallResults` | `6` | Сколько фактов попадает в контекст хода. |
-| `minQueryChars` | `3` | Короче этого запрос не ищется (короткие реплики не тратят бюджет). |
-| `searchMode` | `hybrid` | `hybrid`, `memories` или `chunks`. |
-| `threshold` | `0.3` | Минимальная релевантность факта. |
-| `rerank` | `none` | Переранжирование: `none`, `order` (по порядку сервера) или `aggregate` (по релевантности). |
-| `profileFrequency` | `20` | Профиль подмешивается на первом ходу и далее каждые N ходов. |
-| `profileMaxChars` | `1800` | Бюджет символов на блок профиля в одном ходе. |
-| `recallMaxChars` | `6000` | Бюджет символов на весь блок `<supermemory-context>`. |
-| `recallTimeoutMs` | `2500` | Бюджет recall; при таймауте ход продолжается без памяти. |
-| `timeoutMs` | `8000` | Таймаут обычного запроса к серверу (кроме recall). |
-| `dreaming` | `instant` | Режим обработки документов (`instant` предсказуем на локальном сервере). |
-| `captureDebounceMs` | `1200` | Задержка перед записью сессии, чтобы схлопнуть серию ходов в один документ. |
-| `maxCaptureChars` | `120000` | Верхняя граница размера захватываемой сессии. |
-| `minCaptureChars` | `80` | Сессии короче этого не записываются. |
-| `captureRetries` | `3` | Повторы записи при сетевой ошибке. |
-| `filter` | `""` | Фильтр по метаданным (JSON) для recall в своём namespace; пусто — без фильтра. |
-| `rewriteQuery` | `false` | Сервер переформулирует запрос recall. Точнее, но добавляет ~2 с к ходу. |
-| `ingestWaitMs` | `1500` | Сколько `supermemory_save` ждёт обработки, прежде чем вернуть статус. |
-| `captureTurnsPerChunk` | `25` | Сколько ходов в одном документе, когда сессия не влезает в один. |
-| `allowFileUpload` | `false` | Разрешить `supermemory_upload_file` читать локальные файлы. |
-| `uploadRoots` | `[]` | Каталоги, из которых разрешено читать файлы для загрузки; пусто — ничего нельзя. |
-| `maxUploadBytes` | `20971520` | Максимальный размер загружаемого файла (20 МиБ). |
-
-## Инструменты
-
-| Инструмент | Назначение |
-|---|---|
-| `supermemory_search` | Семантический поиск по всем читаемым namespace или по указанному; принимает `filter` (JSON) и `rewriteQuery`. |
-| `supermemory_profile` | Постоянные факты и свежий контекст, опционально с поиском по запросу. |
-| `supermemory_save` | Сохранить документ в записываемый namespace и вернуть статус обработки (`queued` / `processing` / `done` / `failed`). |
-| `supermemory_forget` | Удалить память по id или по описанию, с предварительным просмотром `dryRun`. |
-| `supermemory_read_document` | Прочитать сохранённый документ или прошлую беседу по id, с постраничным смещением; показывает статус обработки. |
-| `supermemory_list` | Список документов или memories в namespace, со статусом обработки. |
-| `supermemory_namespaces` | Подключение, собственный namespace и все namespace сервера со счётчиками. |
-| `supermemory_upload_file` | Отправить локальный файл (PDF, картинка, офисный документ) в память и вернуть статус обработки. |
-| `supermemory_namespace` | Список namespace, `supportingContext`, удаление (с `confirm` и `moveTo`). Создать namespace сервер не умеет. |
-| `supermemory_buckets` | Профильные buckets: список, задать `{slug: описание}`, удалить. |
-
-## Длинные сессии: документы по частям
-
-Сессия, которая влезает в `maxCaptureChars` (120 000 символов), остаётся **одним** документом `dsh-<sessionId>`.
-Сессия, которая не влезает, режется по границам ходов на `dsh-<sessionId>-p1…pN` по `captureTurnsPerChunk` ходов,
-и каждая часть обновляется на месте. Раньше в память попадал только хвост длинной сессии — начало терялось
-молча; теперь теряется максимум хвост одной части.
-
-Переходы согласованы в обе стороны: когда сессия перерастает лимит, одиночный документ **удаляется**, чтобы не
-дублировать факты; когда компакция снова укладывает её в лимит, лишние части удаляются так же.
-
-## Файлы в память
-
-`supermemory_upload_file` отправляет файл в `/document/file` и возвращает статус обработки. Это единственная
-возможность плагина читать локальный диск, поэтому она **выключена по умолчанию** и, когда включена, ограничена
-каталогами:
+`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"` inside the profile directory
+installs the package but does **not** add it to `dsh.profile.bundles`, so the plugin stays inactive.
+If you install that way, either select the bundle in the GUI, or add the row yourself — and note that
+`- id: supermemory` alone is an **override** (it replaces an existing entry), while a fresh profile
+needs `insert`:
 
 ```yaml
-    allowFileUpload: true
-    uploadRoots:
-      - /Users/you/documents
-    maxUploadBytes: 20971520
+- insert:
+    - id: supermemory
+      name: '@local/dsh-supermemory'
+      config:
+        # every key is optional; omitted keys keep their defaults
+        baseUrl: http://127.0.0.1:6767
+```
+</details>
+
+## Configure
+
+The API key never goes into configuration or this repository — only its reference name does. Put the
+value into the DSH credential store, which reloads live:
+
+```yaml
+# $DSH_HOME/.credentials.yaml  (default: ~/.dsh/.credentials.yaml)
+version: 1
+refs:
+  SUPERMEMORY_API_KEY: <your key>
 ```
 
-Путь канонизируется (`realpathSync`), и файл вне `uploadRoots` отвергается — это защита от того, чтобы внедрённая
-в сессию инструкция не выкачала, например, `~/.ssh/id_rsa` через сервер памяти.
+Exporting `SUPERMEMORY_API_KEY` before launching DSH works too and is used as a fallback.
 
-## Namespace и buckets
+All settings are optional; an override replaces the bundle's `config`, and any key you leave out
+falls back to the default below.
 
-- `supermemory_namespace` — список namespace (`/ns`), задать или очистить `supportingContext` (`PATCH /ns/{ns}`),
-  удалить namespace (`DELETE /ns/{ns}`, опционально с `moveTo`). **Создать** namespace сервер не умеет: `POST /ns`
-  в API отсутствует. Удаление требует `confirm: delete` и отказывается трогать свой namespace и namespace Гермеса.
-- `supermemory_buckets` — профильные buckets (`/profile/buckets`): `{slug: описание}` направляет классификацию
-  фактов; набор ограничен своим namespace, имена — `^[a-z0-9][a-z0-9_-]*$`.
+| Key | Default | Meaning |
+|---|---|---|
+| `baseUrl` | `http://127.0.0.1:8787` | Supermemory server (the local default port; Hermes setups often use `6767`) or `https://api.supermemory.ai`. |
+| `apiKeyRef` | `SUPERMEMORY_API_KEY` | Credential reference holding the key. |
+| `container` | `dsh` | This agent's own namespace — the only one written by default. |
+| `readContainers` | `[]` | Namespaces this agent may read. **Opt-in**: empty by default. |
+| `readPrefixes` | `[]` | Namespace prefixes discovered as readable. **Opt-in**. |
+| `writeContainers` | `[]` | Extra namespaces allowed for writing. Hermes namespaces are rejected. |
+| `allowWritesToReadContainers` | `false` | Also allow writing to the namespaces listed in `readContainers` (never to Hermes ones). |
+| `autoRecall` | `true` | Recall before the first step of a turn. |
+| `autoCapture` | `true` | Capture the finished turn. |
+| `recallSubagents` | `false` | Give subagents recall too. |
+| `captureSubagents` | `false` | Write subagent sessions into memory. |
+| `maxRecallResults` | `6` | Facts admitted into one turn. |
+| `minQueryChars` | `3` | Shortest question worth a recall search. |
+| `searchMode` | `hybrid` | `hybrid`, `memories` or `chunks`. |
+| `threshold` | `0.3` | Minimum relevance. |
+| `rerank` | `none` | `none`, `order` or `aggregate`. |
+| `profileFrequency` | `20` | Inject the profile every N turns; `0` disables. |
+| `profileMaxChars` | `1800` | Character budget for the profile block. |
+| `recallMaxChars` | `6000` | Character budget for the whole recall block. |
+| `recallTimeoutMs` | `2500` | Recall budget; the turn continues without memory when it expires. |
+| `timeoutMs` | `8000` | Timeout for an ordinary API request. |
+| `dreaming` | `instant` | Document processing mode (`instant` or `dynamic`). |
+| `captureDebounceMs` | `1200` | Delay before writing a finished turn. |
+| `maxCaptureChars` | `120000` | Largest single captured document; bigger sessions are chunked. |
+| `captureTurnsPerChunk` | `25` | Turns per chunk when a session is too large for one document. |
+| `minCaptureChars` | `80` | Shortest session worth capturing. |
+| `captureRetries` | `3` | Retries after a failed capture. |
+| `captureRetryDelayMs` | `4000` | Base delay between capture retries (multiplied by the attempt). |
+| `filter` | `""` | Metadata filter (JSON) for recall in your own namespace. |
+| `rewriteQuery` | `false` | Let the server rewrite the recall query (adds ~2–3 s). |
+| `ingestWaitMs` | `1500` | How long `supermemory_save` waits for processing before returning. |
+| `allowFileUpload` | `false` | Allow `supermemory_upload_file` to read local files at all. |
+| `uploadRoots` | `[]` | Directories an upload may read from; empty means none. |
+| `maxUploadBytes` | `20971520` | Largest file an upload may send (20 MiB). |
+| `redactSecrets` | `true` | Strip credential-shaped strings from captured transcripts. |
 
-## Фильтры по метаданным
+### Reading another agent's memory
 
-Плагин пишет в метаданные документов `sm_source`, `source_agent`, `type`
-(`conversation` для сессий, `note` для явных сохранений), `session_id`, `turns`,
-`workspace`, `updated_at`. По ним можно фильтровать поиск — и в recall
-(`filter` в конфиге), и в одном вызове (`filter` у `supermemory_search`).
+Cross-agent reads are deliberately off. To recall Hermes' memory (read-only), add an override:
 
-Проверено на живом сервере: запрос «какие репозитории у пользователя» без фильтра
-отдаёт пять фрагментов сессий подряд, а с фильтром — заметки с фактами:
-
-```json
-{ "field": "type", "operator": "neq", "value": "conversation" }
+```yaml
+- id: supermemory
+  name: '@local/dsh-supermemory'
+  config:
+    readContainers: [hermes_default]
+    readPrefixes: [hermes]
 ```
 
-Вложенные условия (`and` / `or`) тоже работают:
+## Tools
 
-```json
-{ "operator": "and", "operands": [
-  { "field": "source_agent", "operator": "eq", "value": "deepseek-harness" },
-  { "field": "type", "operator": "neq", "value": "conversation" }
-] }
-```
+| Tool | What it does |
+|---|---|
+| `supermemory_search` | Semantic search over readable namespaces; accepts a metadata `filter` and `rewriteQuery`. |
+| `supermemory_profile` | Persistent facts and recent context, optionally with a query. |
+| `supermemory_save` | Store a document in a writable namespace and report the ingest status. |
+| `supermemory_forget` | Preview matches, then delete by id or description with `confirm: "delete"`. |
+| `supermemory_read_document` | Read a stored document by id with pagination and its status. |
+| `supermemory_list` | List documents or memories, newest first, with status. |
+| `supermemory_namespaces` | Connection check and the namespace inventory with counts. |
+| `supermemory_upload_file` | Send a local file (PDF, image, text, office) — only inside `uploadRoots`. |
+| `supermemory_namespace` | List namespaces, set `supportingContext`, delete (writable only, `confirm`). |
+| `supermemory_buckets` | List, set and delete profile buckets. |
 
-Допустимые операторы: `eq`, `neq`, `contains`, `notContains`, `gt`, `gte`, `lt`,
-`lte`, `arrayContains`, `arrayNotContains`; вложенность до 5 уровней. Фильтр из
-конфига применяется только к своему namespace: у чужих агентов своя схема
-метаданных, и чужой фильтр молча выбросил бы их факты.
+## Security model
 
-> `rewriteQuery` по умолчанию выключен: на живом сервере он добавляет ~2,7 с к
-> поиску, а на первом шаге хода это заметно.
+What the plugin guarantees:
 
-## Безопасность и ограничения
+- **No secrets in this repository**, and no secrets in logs, errors, or tool output. The key is
+  resolved per request from the credential store.
+- **Writes stay inside your namespaces.** `writeContainers` cannot name a Hermes namespace, and
+  `allowWritesToReadContainers` never extends to one. Namespace deletion is an allowlist: only a
+  namespace this agent may write can be deleted, never its own, and there is no `moveTo`.
+- **Recalled text cannot forge its own block.** The recall block is delimited by a fresh random
+  nonce per turn; recalled and profile text is stripped of control characters, closing tags, and
+  heading markers before it is shown.
+- **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`, `Bearer …`, PEM
+  blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a transcript is sent.
+- **Uploads are off by default** and confined to `uploadRoots`; the file is opened with `O_NOFOLLOW`,
+  must have a single hard link, and is read through that descriptor with a byte cap.
+- **Irreversible actions need a second step.** `supermemory_forget` previews first and only deletes
+  with `confirm: "delete"`; namespace deletion needs the same.
 
-- Плагин не пишет в namespace Гермеса и не меняет его настройки; все операции чтения идут через официальный API с
-  заголовком `x-sm-source: dsh`.
-- Recall — это фон, а не инструкции: блок прямо помечен как недоверенный, а факты о действиях Гермеса не выдаются за
-  действия DeepSeek Harness.
-- Сохранение асинхронно: новый документ появляется в поиске и профиле после обработки сервером.
-- Локальный сервер должен быть запущен (`npx supermemory local`) и хранит данные у себя; при недоступности сервера
-  инструменты возвращают ошибку, а ходы продолжаются без памяти.
-- Автоматический recall добавляет один сетевой запрос к первому шагу хода; бюджет ограничен `recallTimeoutMs`.
-- Плагин не переносит данные и не меняет настройки namespace на сервере.
-- Внешних зависимостей нет: только `node:` builtin'ы, поэтому установка не тянет `node_modules`.
+What it does **not** guarantee:
 
-## Проверка
+- The server sees what you capture: the user's questions on recall and the session transcript on
+  capture. With the cloud server, that data leaves the machine.
+- Namespace isolation is enforced by this plugin, not by the server: the server's API is
+  account-wide, so one key reaches every namespace. Use separate keys/servers if you need real
+  isolation.
+- Data at rest is the server's responsibility.
+
+See [SECURITY.md](SECURITY.md) for how to report a problem.
+
+## Verify
 
 ```bash
-node --check index.js && node scripts/check.mjs   # манифест, патч, локали, иконка, README
+node --check index.js && node --check scripts/setup.mjs
+node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
+node --test test/           # 50+ unit tests (the Config tests skip without the optional dependency)
 ```
 
-Установленный плагин отдаёт семь инструментов `supermemory_*` и секцию промпта «Supermemory». Живой smoke-тест:
-`supermemory_namespaces` (подключение и счётчики), затем `supermemory_search` с запросом о Гермесе — результаты должны
-быть помечены контейнером `hermes_default`, затем `supermemory_save` тестового документа в `dsh` и проверка, что через
-обработку он стал memories.
+Live check after install: `supermemory_namespaces` lists the server and your namespace;
+`supermemory_search` finds something you saved; after a turn, a document appears in your namespace.
+If you have no Hermes data yet, a search about Hermes legitimately returns nothing.
 
-## Архитектура и детали
+## Architecture and limits
 
-- [`docs/DETAIL.md`](docs/DETAIL.md) — разделение памяти, что происходит автоматически, ограничения и почему не
-  официальный MCP-сервер.
-- [`CHANGELOG.md`](CHANGELOG.md) — история изменений.
-- [`AGENTS.md`](AGENTS.md) — правила для агента, который будет менять этот репозиторий.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how recall, capture, chunking, filters, buckets and
+  namespaces work (Russian).
+- [CHANGELOG.md](CHANGELOG.md) — release notes, including breaking changes.
+- Capture uses the message list of the session: after compaction the transcript reflects the
+  compacted view, so chunk contents can be rewritten (ids stay stable).
+- Recall runs on the first step of a turn only.
+- Ingest is asynchronous: a saved document becomes searchable after the server processes it.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Русская версия: [README.ru.md](README.ru.md).

@@ -9,11 +9,21 @@ test('a plain predicate is normalized', () => {
   )
 })
 
-test('caseSensitive and numeric values survive', () => {
+test('numeric operators keep numbers and text operators keep caseSensitive', () => {
   assert.deepEqual(
-    normalizeFilter({ field: 'turns', operator: 'gte', value: 5, caseSensitive: false }),
-    { field: 'turns', operator: 'gte', value: 5, caseSensitive: false },
+    normalizeFilter({ field: 'turns', operator: 'gte', value: 5 }),
+    { field: 'turns', operator: 'gte', value: 5 },
   )
+  assert.deepEqual(
+    normalizeFilter({ field: 'workspace', operator: 'contains', value: 'Dev', caseSensitive: false }),
+    { field: 'workspace', operator: 'contains', value: 'Dev', caseSensitive: false },
+  )
+})
+
+test('combinations the server rejects fail here instead of at the first request', () => {
+  assert.throws(() => normalizeFilter({ field: 'turns', operator: 'gte', value: '5' }), /numeric value/)
+  assert.throws(() => normalizeFilter({ field: 'type', operator: 'contains', value: 5 }), /string value/)
+  assert.throws(() => normalizeFilter({ field: 'turns', operator: 'gte', value: 5, caseSensitive: true }), /text operators only/)
 })
 
 test('and/or expressions nest', () => {

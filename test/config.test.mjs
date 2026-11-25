@@ -28,8 +28,8 @@ maybe('the schema accepts the configuration that runs on this machine', () => {
 
 maybe('the schema fills every default', () => {
   const resolved = Config({})
-  assert.equal(resolved.baseUrl, 'http://localhost:6767')
-  assert.deepEqual(resolved.readContainers, ['hermes_default'])
+  assert.equal(resolved.baseUrl, 'http://127.0.0.1:8787')
+  assert.deepEqual(resolved.readContainers, [])
   assert.equal(resolved.threshold, 0.3)
   assert.equal(resolved.maxCaptureChars, 120000)
 })

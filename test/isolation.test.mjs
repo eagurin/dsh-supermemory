@@ -24,11 +24,13 @@ test('extra write namespaces are opt-in per name', () => {
   assert.deepEqual(writable, ['dsh', 'notes', 'projects'])
 })
 
-test('allowWritesToReadContainers is the only way to write into a readable one', () => {
-  const closed = resolveSettings({})
-  assert.equal(writableContainers(closed, ['hermes_default']).includes('hermes_default'), false)
-  const opened = resolveSettings({ allowWritesToReadContainers: true })
-  assert.equal(writableContainers(opened, ['hermes_default']).includes('hermes_default'), true)
+test('allowWritesToReadContainers covers listed readable namespaces but never Hermes', () => {
+  const closed = resolveSettings({ readContainers: ['notes'] })
+  assert.equal(writableContainers(closed, ['notes']).includes('notes'), false)
+  const opened = resolveSettings({ readContainers: ['notes', 'hermes_default'], allowWritesToReadContainers: true })
+  const writable = writableContainers(opened, ['notes', 'hermes_default'])
+  assert.equal(writable.includes('notes'), true)
+  assert.equal(writable.includes('hermes_default'), false)
 })
 
 test('write namespaces are sanitized like read namespaces', () => {

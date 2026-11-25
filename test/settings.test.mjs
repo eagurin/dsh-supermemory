@@ -5,8 +5,8 @@ import { resolveSettings, DEFAULTS, CONFIG_KEYS } from './helpers.mjs'
 test('defaults are complete and stable', () => {
   const settings = resolveSettings({})
   assert.equal(settings.container, 'dsh')
-  assert.equal(settings.baseUrl, 'http://localhost:6767')
-  assert.deepEqual(settings.readContainers, ['hermes_default'])
+  assert.equal(settings.baseUrl, 'http://127.0.0.1:8787')
+  assert.deepEqual(settings.readContainers, [])
   assert.equal(settings.filter, undefined)
   assert.equal(settings.rewriteQuery, false)
   assert.equal(settings.ingestWaitMs, 1500)

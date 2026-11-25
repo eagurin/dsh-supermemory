@@ -25,11 +25,13 @@ test('segments keep one human turn and its answers together', () => {
   const { segments, turns } = buildTranscriptSegments(sessionWith(2))
   assert.equal(turns, 2)
   assert.equal(segments.length, 2)
-  assert.match(segments[1].join('\n'), /\*\*Assistant:\*\* ответ 1/)
+  assert.equal(segments[1].turns, 1)
+  assert.match(segments[1].lines.join('\n'), /\*\*Assistant:\*\* ответ 1/)
 })
 
 test('a session that does not fit is split on turn boundaries', () => {
-  const settings = resolveSettings({ maxCaptureChars: 4000, captureTurnsPerChunk: 5, minCaptureChars: 10 })
+  // The budget applies to the transcript body; the header may add ~200 chars.
+  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 5, minCaptureChars: 10 })
   const plan = buildTranscriptChunks(sessionWith(17), settings)
   assert.equal(plan.chunked, true)
   assert.equal(plan.documents.length, 4)
@@ -44,8 +46,8 @@ test('a session that does not fit is split on turn boundaries', () => {
   assert.deepEqual(plan.obsolete, ['dsh-session-test'])
 })
 
-test('every chunk stays within the capture budget', () => {
-  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 4, minCaptureChars: 10 })
+test('every chunk stays near the capture budget', () => {
+  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 2, minCaptureChars: 10 })
   const plan = buildTranscriptChunks(sessionWith(20, 200), settings)
   assert.ok(plan.documents.length > 1)
   for (const document of plan.documents) {
@@ -55,7 +57,7 @@ test('every chunk stays within the capture budget', () => {
 })
 
 test('chunk ids are stable when an already chunked session grows', () => {
-  const settings = resolveSettings({ maxCaptureChars: 4000, captureTurnsPerChunk: 5, minCaptureChars: 10 })
+  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 5, minCaptureChars: 10 })
   const small = buildTranscriptChunks(sessionWith(17), settings)
   const grown = buildTranscriptChunks(sessionWith(22), settings)
   assert.equal(small.chunked, true)
@@ -66,7 +68,7 @@ test('chunk ids are stable when an already chunked session grows', () => {
 })
 
 test('crossing the size limit replaces the single document instead of duplicating it', () => {
-  const settings = resolveSettings({ maxCaptureChars: 4000, captureTurnsPerChunk: 5, minCaptureChars: 10 })
+  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 5, minCaptureChars: 10 })
   const single = buildTranscriptChunks(sessionWith(5), settings)
   const split = buildTranscriptChunks(sessionWith(20), settings)
   assert.equal(single.chunked, false)

@@ -47,6 +47,23 @@ function expand(entry) {
 }
 
 // ------------------------------------------------------------- manifest ----
+/** Every text file in the package except node_modules, .git and the icon. */
+function trackedTextFiles() {
+  const skip = new Set(['node_modules', '.git'])
+  const found = []
+  const walk = (relative) => {
+    const absolute = join(root, relative)
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue
+      const next = relative === '' ? entry.name : `${relative}/${entry.name}`
+      if (entry.isDirectory()) walk(next)
+      else if (/\.(?:js|mjs|json|ya?ml|md|txt)$/.test(entry.name)) found.push(next)
+    }
+  }
+  walk('')
+  return found
+}
+
 const manifest = readJson('package.json')
 const EXPECTED_NAME = '@local/dsh-supermemory'
 
@@ -154,13 +171,60 @@ for (const tool of [
 ]) {
   assert(readme.includes(tool), `README does not mention the ${tool} tool`)
 }
-for (const doc of ['CHANGELOG.md', 'docs/DETAIL.md', 'AGENTS.md', 'SECURITY.md']) {
+for (const doc of ['CHANGELOG.md', 'docs/DETAIL.md', 'docs/ARCHITECTURE.md', 'AGENTS.md', 'SECURITY.md']) {
   assert(existsSync(join(root, doc)), `missing file: ${doc}`)
+}
+// The Plugin Manager detail page accepts exactly one image line; anything else is
+// the wrong artifact for that slot (functionality belongs in meta.description).
+const detail = readText('docs/DETAIL.md')
+const detailLines = detail.split('\n').filter(line => line.trim() !== '')
+assert(detailLines.length === 1 && /^!\[[^\]]+\]\([^)]+\.svg\)$/.test(detailLines[0]), 'docs/DETAIL.md must be exactly one image line, e.g. ![Feature](preview.svg)')
+const detailImage = detailLines[0]?.match(/\(([^)]+)\)/)?.[1]
+if (detailImage) assert(existsSync(join(root, 'docs', detailImage)), `docs/DETAIL.md references a missing image: ${detailImage}`)
+
+// Every locale that declares detail must point at the single-image document and
+// describe the capability, usage and limits — not one bare sentence.
+for (const file of localeFiles) {
+  const data = readJson(file)
+  const description = data?.meta?.description
+  if (typeof description === 'string') {
+    assert(description.length >= 200, `${file}: meta.description is too short to explain usage and limits (${description.length} chars)`)
+  }
+}
+
+// ------------------------------------------------------------------ docs ----
+// A documented install command must name the version this package actually is:
+// a stale tag ships the wrong tool set (v0.3.0 had 7 tools, v0.5.0 has 10).
+for (const file of ['README.md', 'README.ru.md']) {
+  const text = readText(file)
+  const tags = [...text.matchAll(/dsh-supermemory\.git#v(\d+\.\d+\.\d+)/g)].map(match => match[1])
+  assert(tags.length > 0, `${file} does not show a git install command`)
+  for (const tag of tags) {
+    assert(tag === manifest?.version, `${file} installs v${tag} but package.json is ${manifest?.version}`)
+  }
+  assert(text.includes('dsh plugin'), `${file} does not show the canonical \`dsh plugin\` install path`)
+  assert(text.includes('npx supermemory local install') || text.includes('npx supermemory local start'), `${file} does not show how to start the local server`)
+}
+for (const file of ['README.md', 'README.ru.md']) {
+  // Historical changelog entries legitimately describe old releases.
+  assert(!/seven tools|семь инструментов/i.test(readText(file)), `${file} still claims seven tools`)
 }
 
 // --------------------------------------------------------------- secrets ----
-const SECRET_PATTERNS = [/oc_sk_[A-Za-z0-9]/, /\bsk-[A-Za-z0-9]{16,}/, /xox[baprs]-[A-Za-z0-9-]{10,}/, /gh[pousr]_[A-Za-z0-9]{20,}/, /"apiKey"\s*:\s*"[^"$]{8,}"/]
-const scanned = ['index.js', 'cordis.patch.yml', 'package.json', 'README.md', 'CHANGELOG.md', 'AGENTS.md', 'docs/DETAIL.md', ...localeFiles]
+const SECRET_PATTERNS = [
+  /oc_sk_[A-Za-z0-9]/,
+  /\bsm_[A-Za-z0-9_-]{40,}/,
+  /\bsk-[A-Za-z0-9]{16,}/,
+  /xox[baprs]-[A-Za-z0-9-]{10,}/,
+  /gh[pousr]_[A-Za-z0-9]{20,}/,
+  /AKIA[0-9A-Z]{16}/,
+  /"apiKey"\s*:\s*"[^"$]{8,}"/,
+  /-----BEGIN [A-Z ]+-----/,
+]
+const scanned = [
+  ...trackedTextFiles(),
+  ...localeFiles,
+]
 for (const file of scanned) {
   const text = readText(file)
   for (const pattern of SECRET_PATTERNS) {

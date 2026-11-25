@@ -20,12 +20,24 @@ Does:
 - **No credential in logs or errors.** Errors name the reference and the endpoint,
   never the key; `scripts/check.mjs` fails the build on secret-looking strings.
 - **Agent isolation by default.** The plugin writes only to its own namespace.
-  `hermes*` namespaces are read-only; writing there requires an explicit
-  `allowWritesToReadContainers: true`, and recalled Hermes facts are labelled as
-  another agent's experience.
-- **No dependencies that execute code at install time.** The only dependency is
-  `@deepseek-ai/schemastery`, with no `preinstall`/`install`/`postinstall`
-  scripts in its tree.
+  Another agent's namespaces are readable only when explicitly listed in
+  `readContainers` (empty by default), `writeContainers` refuses a Hermes name,
+  `allowWritesToReadContainers` never extends to one, and namespace deletion is an
+  allowlist of writable namespaces with no `moveTo`.
+- **Recalled text cannot forge its own block.** The recall block is delimited by a
+  fresh random nonce per turn; control characters, closing tags and heading
+  markers are stripped from recalled facts and profile text before they are shown.
+- **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`,
+  `Bearer …`, PEM blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a
+  transcript is sent.
+- **Uploads are off by default**, confined to `uploadRoots`, opened with
+  `O_NOFOLLOW`, required to have a single hard link, and read through that
+  descriptor with a byte cap.
+- **Irreversible actions take two steps.** `supermemory_forget` previews first and
+  deletes only with `confirm: "delete"`; namespace deletion needs the same.
+- **No dependency runs code at install time.** The only dependency is
+  `@deepseek-ai/schemastery` (the Config schema), with no
+  `preinstall`/`install`/`postinstall` scripts in its tree.
 - **No telemetry.** The only network destination is the configured `baseUrl`.
 
 Does not:
@@ -38,7 +50,10 @@ Does not:
 - **Protect a compromised Host.** The plugin trusts the Host's credential service
   and session objects; it does not sandbox them.
 - **Encrypt local storage.** Data at rest is the server's responsibility
-  (`npx supermemory local` keeps its own store).
+  (`npx supermemory local start` keeps its own store).
+- **Isolate namespaces server-side.** The Supermemory API is account-wide: one key
+  reaches every namespace. Namespace isolation here is enforced by this plugin, so
+  use separate keys or servers if you need a hard boundary.
 
 ## Threat model in one line
 

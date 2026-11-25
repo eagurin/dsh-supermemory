@@ -22,7 +22,10 @@ import { stdin, stdout, argv, env, exit } from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { internals } from '../index.js'
 
-const LOCAL_DEFAULT = 'http://127.0.0.1:6767'
+// `npx supermemory local start` listens on PORT or 8787; Hermes setups often run it
+// on 6767, so both are probed before asking the operator to choose.
+const LOCAL_CANDIDATES = ['http://127.0.0.1:8787', 'http://127.0.0.1:6767']
+const LOCAL_DEFAULT = LOCAL_CANDIDATES[0]
 const CLOUD_DEFAULT = 'https://api.supermemory.ai'
 
 /** Parse `--flag value` pairs; booleans stand alone. */
@@ -121,7 +124,7 @@ export function buildPlan(choices) {
     apiKeyRef: resolved.apiKeyRef,
     localServerDetected: localUp,
     warnings: [
-      ...(mode === 'local' && !localUp ? [`no server is answering ${localUrl}; start it with \`npx supermemory local\` or the memory will report errors per turn`] : []),
+      ...(mode === 'local' && !localUp ? [`no server is answering ${localUrl}; start it with \`npx supermemory local install\` once and \`npx supermemory local start\`, or the memory will report errors per turn`] : []),
       ...(mode === 'cloud' ? ['with the cloud server the captured transcripts leave this machine'] : []),
       'an override replaces the whole config, so paste every key below',
     ],
@@ -132,16 +135,22 @@ export function buildPlan(choices) {
 async function main() {
   const flags = parseFlags(argv.slice(2))
   const json = flags.json === true
-  const localUrl = typeof flags['local-url'] === 'string' ? flags['local-url'] : (env.SUPERMEMORY_LOCAL_URL || LOCAL_DEFAULT)
+  const explicitUrl = typeof flags['local-url'] === 'string' ? flags['local-url'] : env.SUPERMEMORY_LOCAL_URL
+  const candidates = explicitUrl ? [explicitUrl] : LOCAL_CANDIDATES
 
   const probing = flags['no-probe'] !== true
   // The local server restarts on its own schedule (launchd, keepalive), so a
   // single failed probe would be a false negative: retry before declaring it down.
+  let localUrl = explicitUrl || LOCAL_DEFAULT
   let localUp = false
   if (probing) {
-    for (let attempt = 0; attempt < 3 && !localUp; attempt += 1) {
-      localUp = await reachable(localUrl)
-      if (!localUp) await new Promise(resolve => setTimeout(resolve, 300))
+    for (const candidate of candidates) {
+      for (let attempt = 0; attempt < 2 && !localUp; attempt += 1) {
+        localUp = await reachable(candidate)
+        if (localUp) localUrl = candidate
+        else await new Promise(resolve => setTimeout(resolve, 200))
+      }
+      if (localUp) break
     }
   }
 
@@ -159,7 +168,7 @@ async function main() {
         needDecision: true,
         reason: `no local Supermemory server answered /v3/health at ${localUrl}`,
         options: [
-          { mode: 'local', baseUrl: localUrl, hint: 'start it with `npx supermemory local`' },
+          { mode: 'local', baseUrl: localUrl, hint: 'start it with `npx supermemory local install` once, then `npx supermemory local start`' },
           { mode: 'cloud', baseUrl: CLOUD_DEFAULT, hint: 'needs an API key from https://console.supermemory.ai' },
         ],
       }, null, 2))
@@ -225,12 +234,16 @@ async function main() {
     }
 
     console.log('\n== Loader row for the profile patch ==\n')
-    console.log(row)
+    console.log(plan.row)
     console.log('\n== Next steps ==\n')
-    console.log(`  1. Put the API key into the DSH credential store under ${plan.apiKeyRef}`)
-    console.log(`     ${mode === 'cloud' ? '(from https://console.supermemory.ai)' : '(local: cat ~/.supermemory/api-key)'}`)
-    console.log('  2. Paste the row above into ~/.dsh/profiles/<profile>/cordis.patch.yml')
-    console.log('  3. Restart the app and check: supermemory_namespaces, then supermemory_search')
+    console.log('  1. Install the bundle (it inserts its own row, so nothing has to be pasted):')
+    console.log('       dsh plugin --profile <profile> add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"')
+    console.log(`  2. Put the key into the DSH credential store under ${plan.apiKeyRef}:`)
+    console.log('       $DSH_HOME/.credentials.yaml → version: 1, refs: { ' + plan.apiKeyRef + ': <key> }')
+    console.log(`       ${mode === 'cloud' ? '(key from https://console.supermemory.ai)' : '(local: cat ~/.supermemory/api-key)'}`)
+    console.log('  3. Change settings only if the defaults above do not fit: paste the row as an')
+    console.log('     override in ~/.dsh/profiles/<profile>/cordis.patch.yml (it replaces the bundle config).')
+    console.log('  4. Restart the app and check: supermemory_namespaces, then supermemory_search')
     for (const warning of plan.warnings) console.log(`\n  ! ${warning}`)
   } finally {
     if (rl) rl.close()

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildTranscript, resolveSettings } from './helpers.mjs'
+import { buildTranscriptChunks, resolveSettings } from './helpers.mjs'
 import { fakeSession, userMessage, assistantMessage } from './helpers.mjs'
 
 test('the transcript keeps human turns and assistant answers only', () => {
@@ -9,7 +9,9 @@ test('the transcript keeps human turns and assistant answers only', () => {
     assistantMessage('Запомнил.'),
     userMessage('recall block', 'supermemory'),
   ], { cwd: '/workspace/demo' })
-  const { content, turns } = buildTranscript(session, resolveSettings({ minCaptureChars: 10 }))
+  const plan = buildTranscriptChunks(session, resolveSettings({ minCaptureChars: 10 }))
+  const { turns } = plan
+  const content = plan.documents[0]?.content ?? ''
   assert.equal(turns, 1)
   assert.match(content, /# DeepSeek Harness conversation session-test/)
   assert.match(content, /- workspace: \/workspace\/demo/)
@@ -20,8 +22,8 @@ test('the transcript keeps human turns and assistant answers only', () => {
 
 test('a session shorter than minCaptureChars is not captured', () => {
   const session = fakeSession([userMessage('ок')])
-  const { content } = buildTranscript(session, resolveSettings({ minCaptureChars: 500 }))
-  assert.equal(content, '')
+  const plan = buildTranscriptChunks(session, resolveSettings({ minCaptureChars: 500 }))
+  assert.deepEqual(plan.documents, [])
 })
 
 test('a long session is clamped from the tail and marked', () => {
@@ -30,21 +32,22 @@ test('a long session is clamped from the tail and marked', () => {
     messages.push(userMessage(`вопрос номер ${index} ${'x'.repeat(120)}`))
     messages.push(assistantMessage(`ответ номер ${index} ${'y'.repeat(120)}`))
   }
-  const { content } = buildTranscript(fakeSession(messages), resolveSettings({ maxCaptureChars: 2000 }))
-  assert.match(content, /…\[earlier turns omitted\]/)
-  assert.ok(content.length < 4000)
-  assert.match(content, /ответ номер 39/)
+  const plan = buildTranscriptChunks(fakeSession(messages), resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 10, minCaptureChars: 10 }))
+  assert.ok(plan.chunked, 'a session over the budget must be chunked')
+  const last = plan.documents.at(-1).content
+  assert.match(last, /часть|part \d+ of \d+/)
+  assert.match(last, /ответ номер 39/)
 })
 
 test('a session without a usable message list does not throw', () => {
   const broken = { id: 'session-broken', header: {}, deriveMessages() { throw new Error('disposed') } }
-  const { content, turns } = buildTranscript(broken, resolveSettings({}))
-  assert.equal(content, '')
-  assert.equal(turns, 0)
+  const plan = buildTranscriptChunks(broken, resolveSettings({}))
+  assert.deepEqual(plan.documents, [])
+  assert.equal(plan.turns, 0)
 })
 
 test('capture metadata counts the turns that were actually captured', () => {
   const session = fakeSession([userMessage('один'), assistantMessage('a'), userMessage('два')])
-  const { turns } = buildTranscript(session, resolveSettings({}))
+  const { turns } = buildTranscriptChunks(session, resolveSettings({ minCaptureChars: 5 }))
   assert.equal(turns, 2)
 })
