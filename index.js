@@ -45,7 +45,7 @@ const SOURCE = 'dsh'
 const DEFAULT_CONTAINER = 'dsh'
 
 const DEFAULTS = {
-  baseUrl: 'http://127.0.0.1:8787',
+  baseUrl: 'http://127.0.0.1:6767',
   apiKeyRef: 'SUPERMEMORY_API_KEY',
   container: DEFAULT_CONTAINER,
   readContainers: [],
@@ -79,7 +79,7 @@ const DEFAULTS = {
   rewriteQuery: false,
   /** How long a save waits for the document to be processed before returning. */
   ingestWaitMs: 1500,
-  /** Turns per document when a session is too large for one; 0 keeps the whole session in one. */
+  /** Turns per document when a session is too large for one (minimum 1). */
   captureTurnsPerChunk: 25,
   /** Allow `supermemory_upload_file` to read local files at all. */
   allowFileUpload: false,
@@ -339,6 +339,9 @@ function sanitizeUntrusted(value, options = {}) {
   if (typeof value !== 'string') return ''
   let text = value.replace(CONTROL_CHARS, '')
   text = text.replace(/<\/?supermemory-context>/gi, '')
+  // A fact may carry a marker for a *different* nonce; it cannot close the real
+  // block, but neutralizing the shape keeps a model from mistaking it for one.
+  text = text.replace(/<<<\s*\/?\s*(?:end-)?supermemory-[^>]*>>>/gi, '')
   // Break heading markers at line start: `### ` would otherwise render as our own
   // section title inside the block.
   text = text.replace(/(^|\n)(\s*)#{2,}/g, (_, lead, indent) => `${lead}${indent}##\u200b#`)
@@ -403,6 +406,10 @@ async function api(ctx, settings, path, options = {}) {
     if (controller.signal.aborted && !(signal && signal.aborted)) {
       throw new Error(`Supermemory request to ${settings.baseUrl} timed out after ${timeoutMs} ms`)
     }
+    if (error instanceof TypeError || (error && error.name === 'TypeError')) {
+      const cause = error.cause && (error.cause.code || error.cause.message) ? `: ${error.cause.code || error.cause.message}` : ''
+      throw new Error(`cannot reach Supermemory at ${settings.baseUrl}${cause}`)
+    }
     throw error
   } finally {
     clearTimeout(timer)
@@ -464,13 +471,14 @@ function mergeFacts(groups, max) {
       const key = text.slice(0, 160)
       if (seen.has(key)) continue
       seen.add(key)
+      // In hybrid mode the same endpoint also returns chunk rows; their `id` is a
+      // chunk id that `supermemory_forget` cannot delete. Only memory rows carry one.
+      const memoryId = typeof item.memory === 'string' ? item.id : undefined
       facts.push({
         container: group.container,
         text,
         similarity: typeof item.similarity === 'number' ? item.similarity : 0,
-        // v5 search results carry a memory id; documents only appear when
-        // `include.documents` is requested, which this plugin never does.
-        memoryId: item.id || undefined,
+        memoryId: memoryId || undefined,
       })
     }
   }
@@ -529,22 +537,26 @@ function profileFacts(data) {
  * @returns {string} joined text.
  */
 function clampLines(lines, maxChars, keep = 'head') {
-  const source = keep === 'tail' ? [...lines].reverse() : lines
+  const source = (keep === 'tail' ? [...lines].reverse() : lines)
+    .filter(line => typeof line === 'string' && line.trim().length > 0)
   const kept = []
   let used = 0
   for (const line of source) {
-    if (used + line.length + 1 > maxChars && kept.length > 0) break
+    const need = line.length + (kept.length > 0 ? 1 : 0)
+    if (used + need > maxChars) break
     kept.push(line)
-    used += line.length + 1
+    used += need
+  }
+  if (kept.length === 0) {
+    // Nothing fits, but a single long line still has to contribute: returning ''
+    // produced empty documents, and an empty capture then retired the previous one.
+    const first = source[0] || ''
+    return keep === 'tail' ? first.slice(-maxChars) : first.slice(0, maxChars)
   }
   if (keep === 'tail') kept.reverse()
   const joined = kept.join('\n')
   if (joined.length <= maxChars) return joined
-  // A budget smaller than the marker itself cannot carry a marker: hard-cut it,
-  // otherwise the slice arithmetic returns an empty string.
-  const marker = '\n…[truncated]'
-  if (maxChars <= marker.length) return joined.slice(0, Math.max(0, maxChars))
-  return `${joined.slice(0, maxChars - marker.length)}${marker}`
+  return keep === 'tail' ? joined.slice(-maxChars) : joined.slice(0, maxChars)
 }
 
 /**
@@ -562,6 +574,7 @@ async function buildRecall(ctx, settings, query, options = {}) {
   const per = Math.max(1, Math.ceil(settings.maxRecallResults / containers.length))
   const groups = await Promise.all(containers.map(async container => {
     try {
+      const budget = typeof options.remaining === 'function' ? options.remaining() : settings.recallTimeoutMs
       const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/search`, {
         method: 'POST',
         body: {
@@ -577,7 +590,7 @@ async function buildRecall(ctx, settings, query, options = {}) {
           ...(container === settings.container && options.filter ? { filter: options.filter } : {}),
           ...(settings.rewriteQuery ? { rewriteQuery: true } : {}),
         },
-        timeoutMs: settings.recallTimeoutMs,
+        timeoutMs: budget,
         signal: options.signal,
       })
       return { container, results: Array.isArray(data && data.results) ? data.results : [] }
@@ -611,9 +624,13 @@ async function buildRecall(ctx, settings, query, options = {}) {
     if (profile) {
       lines.push(profile)
     }
+    const perFact = Math.max(120, Math.floor(settings.recallMaxChars / 2))
     for (const fact of groupFacts) {
       const percent = Math.round(fact.similarity * 100)
-      lines.push(`- ${percent}% · ${sanitizeUntrusted(fact.text, { singleLine: true })}`)
+      // Truncate a long fact instead of letting clampLines drop it whole.
+      const text = sanitizeUntrusted(fact.text, { singleLine: true })
+      const shown = text.length > perFact ? `${text.slice(0, perFact)}…` : text
+      lines.push(`- ${percent}% · ${shown}`)
     }
     lines.push('')
   }
@@ -632,12 +649,13 @@ async function buildRecall(ctx, settings, query, options = {}) {
  * @param {AbortSignal} [signal] - cancellation.
  * @returns {Promise<string>} markdown bullets, or an empty string.
  */
-async function fetchProfileText(ctx, settings, container, signal, failures) {
+async function fetchProfileText(ctx, settings, container, signal, failures, remaining) {
   try {
+    const budget = typeof remaining === 'function' ? remaining() : settings.recallTimeoutMs
     const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/profile`, {
       method: 'POST',
       body: {},
-      timeoutMs: settings.recallTimeoutMs,
+      timeoutMs: budget,
       signal,
     })
     const facts = profileFacts(data)
@@ -658,9 +676,9 @@ async function fetchProfileText(ctx, settings, container, signal, failures) {
  * @param {AbortSignal} [signal] - cancellation.
  * @returns {Promise<{status: string, createdAt?: string, updatedAt?: string}>} processing state.
  */
-async function fetchDocumentStatus(ctx, settings, container, documentId, signal) {
+async function fetchDocumentStatus(ctx, settings, container, documentId, signal, timeoutMs = settings.timeoutMs) {
   const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/document/${encodeURIComponent(documentId)}`, {
-    timeoutMs: settings.timeoutMs,
+    timeoutMs,
     signal,
   })
   const system = (data && data.system) || (data && data.document && data.document.system) || {}
@@ -687,7 +705,8 @@ async function waitForIngest(ctx, settings, container, documentId, signal) {
   let observed = { status: 'unknown' }
   for (;;) {
     try {
-      observed = await fetchDocumentStatus(ctx, settings, container, documentId, signal)
+      const remaining = Math.max(500, deadline - Date.now())
+      observed = await fetchDocumentStatus(ctx, settings, container, documentId, signal, Math.min(settings.timeoutMs, remaining))
     } catch (error) {
       const status = typeof error.status === 'number' ? error.status : 0
       // A 404 right after POST only means the server has not registered it yet.
@@ -730,26 +749,31 @@ function ingestText(status) {
  * @returns {Promise<string[]>} readable container names, own container excluded.
  */
 function makeContainerResolver(ctx, settings) {
-  let cache = { at: 0, names: [] }
-  return async function readableContainers() {
+  let cache = { at: 0, names: [], complete: true }
+  return async function readableContainers(deadline) {
     const now = Date.now()
     if (now - cache.at < 60_000) return cache.names
     const names = new Set(settings.readContainers)
+    let complete = true
     if (settings.readPrefixes.length > 0) {
       try {
-        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: 4000 })
+        const budget = typeof deadline === 'number' ? Math.max(200, deadline - Date.now()) : Math.max(settings.recallTimeoutMs, 1000)
+        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: budget })
         const list = data && Array.isArray(data.namespaces) ? data.namespaces : []
         for (const entry of list) {
           const namespace = entry && entry.namespace
           if (typeof namespace !== 'string') continue
           if (settings.readPrefixes.some(prefix => namespace.startsWith(prefix))) names.add(namespace)
         }
-      } catch {
-        // Discovery is best effort; explicitly configured containers still work.
+      } catch (error) {
+        // A failed discovery must not be cached: caching it silently dropped whole
+        // namespaces from search and recall for the next minute.
+        complete = false
+        log('warn', `namespace discovery failed, using configured containers only: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
     names.delete(settings.container)
-    cache = { at: now, names: [...names] }
+    cache = { at: now, names: [...names], complete }
     return cache.names
   }
 }
@@ -782,8 +806,9 @@ function writableContainers(settings, readable) {
  */
 function promptText(settings) {
   const read = settings.readContainers.length > 0 ? settings.readContainers.join('`, `') : ''
-  const reads = read
-    ? `Read-only namespaces: \`${read}\`${settings.readPrefixes.length > 0 ? ` and any namespace starting with ${settings.readPrefixes.map(p => `\`${p}\``).join(', ')}` : ''}.`
+  const prefixes = settings.readPrefixes.length > 0 ? settings.readPrefixes.map(p => `\`${p}\``).join(', ') : ''
+  const reads = read || prefixes
+    ? `Read-only namespaces: ${read ? `\`${read}\`` : ''}${read && prefixes ? ' and ' : ''}${prefixes ? `any namespace starting with ${prefixes}` : ''}.`
     : 'No other namespaces are readable.'
   return [
     '## Supermemory',
@@ -891,7 +916,8 @@ function isCheckpointMessage(message) {
 function buildTranscriptSegments(session) {
   let messages = []
   try {
-    messages = session.deriveMessages()
+    const derived = session.deriveMessages()
+    messages = Array.isArray(derived) ? derived : []
   } catch {
     messages = []
   }
@@ -900,17 +926,21 @@ function buildTranscriptSegments(session) {
   const checkpointIds = []
   let current = null
   let turns = 0
+  let checkpoints = 0
 
   for (const message of messages) {
     if (!message) continue
     if (isCheckpointMessage(message)) {
       const text = messageText(message)
-      // `id` is the canonical identity; `source.compactionId` and the text are
-      // fallbacks so a checkpoint is never mistaken for an ordinary sequence.
+      checkpoints += 1
+      // `id` is the canonical identity; `source.compactionId`, the text, and finally
+      // the ordinal are fallbacks. The ordinal matters: two id-less checkpoints with
+      // the same summary text must not land in one family and overwrite each other.
       const identity = message.id
         || (message.source && message.source.compactionId)
         || text
-      if (identity) checkpointIds.push(String(identity))
+        || 'anonymous'
+      checkpointIds.push(`${identity}#${checkpoints}`)
       if (!text) continue
       // A checkpoint summarizes everything before it; keep it as a labelled part of
       // the transcript instead of silently dropping the only remaining trace.
@@ -1008,15 +1038,15 @@ function transcriptHeader(session, turns, part) {
 }
 
 /** Render one capture unit, clamped and aligned to a role marker. */
-function renderChunk(session, settings, lines, turns, part, parts) {
+function renderChunk(session, settings, lines, turns, part) {
   const header = transcriptHeader(session, turns, part === undefined ? undefined : String(part))
-  let body = clampLines(lines.flat(), settings.maxCaptureChars, 'tail')
+  const flat = lines.flat()
+  const raw = flat.join('\n')
+  // Keep the beginning of a chunk: it holds the user's request. A tail clamp used to
+  // drop an over-long turn entirely and leave only the answer (or nothing at all).
+  let body = clampLines(flat, settings.maxCaptureChars, 'head')
   body = redactSecrets(body, settings.redactSecrets !== false)
-  // Any leading role label keeps the slice readable; a fixed list missed
-  // `**schedule:**`/`**team-message:**` and cut those turns off the chunk.
-  const marker = body.match(/\*\*[A-Za-z][^*\n]*:\*\*/)
-  const start = marker ? body.indexOf(marker[0]) : -1
-  if (start > 0) body = `…[earlier turns omitted]\n\n${body.slice(start)}`
+  if (raw.length > body.length) body = `${body}\n…[later content omitted]`
   return `${header}\n${body}`
 }
 
@@ -1034,7 +1064,14 @@ function renderChunk(session, settings, lines, turns, part, parts) {
  * @returns {{documents: Array<object>, chunked: boolean, turns: number, family: string, obsolete: string[]}} capture plan.
  */
 function buildTranscriptChunks(session, settings) {
-  const sessionId = String(session.id).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
+  const rawSessionId = String(session.id)
+  const sanitized = rawSessionId.replace(/[^a-zA-Z0-9_-]/g, '_')
+  // Two different session ids must not share a document: sanitizing `a/b` and `a b`
+  // or truncating a long id would silently merge their memory. The suffix appears
+  // only when the id had to change, so ordinary UUID sessions keep their ids.
+  const sessionId = (sanitized === rawSessionId && sanitized.length <= 200)
+    ? sanitized
+    : `${sanitized.slice(0, 200)}-h${createHash('sha256').update(rawSessionId).digest('hex').slice(0, 8)}`
   const { segments, turns, checkpointIds } = buildTranscriptSegments(session)
   const family = familyTag(checkpointIds)
   const baseId = family === 'g0' ? `dsh-${sessionId}` : `dsh-${sessionId}-${family}`
@@ -1059,20 +1096,36 @@ function buildTranscriptChunks(session, settings) {
     }
   }
 
-  // Too large for one document: cut on turn boundaries, never mid-turn.
+  // Too large for one document: cut on turn boundaries, never mid-turn. The budget
+  // is counted in turns (the setting's unit), so one huge turn cannot drag twenty
+  // short ones into the same part.
   const per = Math.max(1, settings.captureTurnsPerChunk)
   const groups = []
-  for (let index = 0; index < segments.length; index += per) groups.push(segments.slice(index, index + per))
+  let bucket = []
+  let bucketTurns = 0
+  for (const segment of segments) {
+    if (bucket.length > 0 && bucketTurns >= per) {
+      groups.push(bucket)
+      bucket = []
+      bucketTurns = 0
+    }
+    bucket.push(segment)
+    bucketTurns += segment.turns
+  }
+  if (bucket.length > 0) groups.push(bucket)
   let seenTurns = 0
   const documents = groups.map((group, index) => {
     const part = index + 1
     const groupTurns = group.reduce((total, segment) => total + segment.turns, 0)
     const fromTurn = seenTurns + 1
     seenTurns += groupTurns
+    // A group made only of a summary or assistant text carries no turn numbers;
+    // reporting `from > to` would be nonsense in metadata and in filters.
+    const toTurn = groupTurns === 0 ? fromTurn : seenTurns
     return {
       documentId: `${baseId}-p${part}`,
       content: renderChunk(session, settings, group.map(segment => segment.lines), groupTurns, part, groups.length),
-      metadata: { part, parts: groups.length, from_turn: fromTurn, to_turn: seenTurns },
+      metadata: { part, parts: groups.length, from_turn: fromTurn, to_turn: toTurn },
       turns: groupTurns,
     }
   })
@@ -1244,7 +1297,9 @@ async function apiMultipart(ctx, settings, path, form, signal) {
   const key = await resolveApiKey(ctx, settings)
   if (!key) throw new Error(`Supermemory API key is not configured: credential reference ${settings.apiKeyRef} is empty.`)
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), Math.max(settings.timeoutMs, 60000))
+  // An upload carries the file body, so it needs more room than a JSON call, but it
+  // must still be bounded by a configurable value rather than a hard 60 s floor.
+  const timer = setTimeout(() => controller.abort(), Math.max(settings.timeoutMs, 30000))
   const relayAbort = () => controller.abort()
   if (signal) {
     if (signal.aborted) controller.abort()
@@ -1274,6 +1329,15 @@ async function apiMultipart(ctx, settings, path, form, signal) {
       throw error
     }
     return data
+  } catch (error) {
+    if (controller.signal.aborted && !(signal && signal.aborted)) {
+      throw new Error(`Supermemory upload to ${settings.baseUrl} timed out`)
+    }
+    if (error instanceof TypeError || (error && error.name === 'TypeError')) {
+      const cause = error.cause && (error.cause.code || error.cause.message) ? `: ${error.cause.code || error.cause.message}` : ''
+      throw new Error(`cannot reach Supermemory at ${settings.baseUrl}${cause}`)
+    }
+    throw error
   } finally {
     clearTimeout(timer)
     if (signal) signal.removeEventListener('abort', relayAbort)
@@ -1286,7 +1350,7 @@ async function apiMultipart(ctx, settings, path, form, signal) {
  * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
  * @param {string} container - namespace holding the documents.
  * @param {string[]} ids - document ids.
- * @returns {Promise<number>} how many the server reported deleted.
+ * @returns {Promise<{removed: number, failed: Array<{id: string, reason: string}>}>} what the server confirmed and what it refused.
  */
 async function deleteDocuments(ctx, settings, container, ids) {
   const unique = [...new Set(ids.filter(id => typeof id === 'string' && id.length > 0))]
@@ -1333,12 +1397,15 @@ async function deleteDocuments(ctx, settings, container, ids) {
 function defineTool(definition) {
   const parameters = definition.parameters
   const execute = definition.execute
-  const wrap = required => ({
+  /** Wrap execute so a declared required list is enforced and a bad args bag is safe. */
+  const wrap = (required, extra = {}) => ({
     ...definition,
-    async execute(args, exec) {
-      const missing = required.filter(key => args[key] === undefined || args[key] === null || args[key] === '')
+    ...extra,
+    async execute(args = {}, exec) {
+      const input = args && typeof args === 'object' ? args : {}
+      const missing = required.filter(key => input[key] === undefined || input[key] === null || input[key] === '')
       if (missing.length > 0) throw new Error(`${definition.name}: missing required argument(s): ${missing.join(', ')}`)
-      return execute(args, exec)
+      return execute(input, exec)
     },
   })
   // A definition that already carries a JSON Schema is passed through, but its
@@ -1353,20 +1420,14 @@ function defineTool(definition) {
     properties[name] = rest
     if (isRequired) required.push(name)
   }
-  return {
-    ...definition,
+  return wrap(required, {
     parameters: {
       type: 'object',
       properties,
       additionalProperties: false,
       ...(required.length > 0 ? { required } : {}),
     },
-    async execute(args, exec) {
-      const missing = required.filter(key => args[key] === undefined || args[key] === null || args[key] === '')
-      if (missing.length > 0) throw new Error(`${definition.name}: missing required argument(s): ${missing.join(', ')}`)
-      return execute(args, exec)
-    },
-  }
+  })
 }
 
 /**
@@ -1426,6 +1487,9 @@ export function apply(ctx, raw) {
 
   ctx.effect(() => () => {
     for (const state of captureState.values()) {
+      // A flush that is already in flight must not keep writing (or re-arm a retry)
+      // against a disposed context.
+      state.disposed = true
       if (state.timer) clearTimeout(state.timer)
     }
     captureState.clear()
@@ -1457,13 +1521,21 @@ export function apply(ctx, raw) {
       const sessionId = String(payload.agent.id)
       const previous = recalledTurns.get(sessionId)
       if (previous && previous.turn === payload.turn) return decision
+      // Reserve the turn before the awaits: two concurrent pre-step calls for the
+      // same turn would otherwise both pass the check and inject two blocks.
+      recalledTurns.set(sessionId, { turn: payload.turn })
 
-      const readable = (await readableContainers().catch(() => [])).slice(0, 3)
+      // One deadline for the whole recall: discovery, profiles and searches each had
+      // their own timeout, so a cold server could stall the turn for seconds longer
+      // than `recallTimeoutMs` promises.
+      const deadline = Date.now() + settings.recallTimeoutMs
+      const remaining = () => Math.max(200, deadline - Date.now())
+      const readable = (await readableContainers(deadline).catch(() => [])).slice(0, 3)
       const recallFailures = []
       const profileTexts = new Map()
       if (settings.profileFrequency > 0 && (payload.turn === 1 || payload.turn % settings.profileFrequency === 0)) {
         const containers = [settings.container, ...readable.slice(0, 3)]
-        const profiles = await Promise.all(containers.map(async container => [container, await fetchProfileText(ctx, settings, container, payload.signal, recallFailures)]))
+        const profiles = await Promise.all(containers.map(async container => [container, await fetchProfileText(ctx, settings, container, payload.signal, recallFailures, remaining)]))
         for (const [container, text] of profiles) {
           if (text) profileTexts.set(container, `Known profile facts:\n${text}`)
         }
@@ -1487,6 +1559,7 @@ export function apply(ctx, raw) {
           signal: payload.signal,
           filter: settings.filter,
           failures: recallFailures,
+          remaining,
         })
       } catch (error) {
         log('debug', `recall skipped: ${error instanceof Error ? error.message : String(error)}`)
@@ -1499,7 +1572,6 @@ export function apply(ctx, raw) {
       }
       if (!block || payload.signal.aborted) return decision
 
-      recalledTurns.set(sessionId, { turn: payload.turn })
       if (recalledTurns.size > 200) {
         const oldest = recalledTurns.keys().next().value
         if (oldest !== undefined) recalledTurns.delete(oldest)
@@ -1552,7 +1624,7 @@ export function apply(ctx, raw) {
     }
 
     const flush = async (sessionId, session, state) => {
-      if (!session) return
+      if (!session || state.disposed) return
       if (session.header && session.header.origin === 'subagent' && !settings.captureSubagents) return
 
       const plan = buildTranscriptChunks(session, settings)
@@ -1617,7 +1689,7 @@ export function apply(ctx, raw) {
         const retryable = status === 0 || status === 408 || status === 429 || status >= 500
         state.attempts += 1
         log(retryable ? 'debug' : 'warn', `capture failed for ${sessionId} (attempt ${state.attempts}, status ${status || 'network'}): ${error instanceof Error ? error.message : String(error)}`)
-        if (retryable && state.attempts <= settings.captureRetries) {
+        if (retryable && !state.disposed && state.attempts <= settings.captureRetries) {
           state.timer = setTimeout(() => scheduleFlush(sessionId, session, state), settings.captureRetryDelayMs * state.attempts)
         }
       }
@@ -1710,11 +1782,13 @@ export function apply(ctx, raw) {
       if (!query) throw new Error('query must be a non-empty string')
       const limit = Math.min(20, Math.max(1, Number(args.limit) || settings.maxRecallResults))
       const mode = ['hybrid', 'memories', 'chunks'].includes(args.mode) ? args.mode : settings.searchMode
+      // Validate before touching the network: a typo in a filter must not cost a
+      // discovery request (and, on a slow server, seconds of waiting).
+      const filter = normalizeFilter(args.filter, 'filter')
+      const rewrite = args.rewriteQuery === undefined ? settings.rewriteQuery : args.rewriteQuery === true
       const containers = args.container
         ? [await resolveReadContainer(args.container)]
         : [settings.container, ...(await readableContainers())]
-      const filter = normalizeFilter(args.filter, 'filter')
-      const rewrite = args.rewriteQuery === undefined ? settings.rewriteQuery : args.rewriteQuery === true
       const groups = await Promise.all(containers.map(async container => {
         try {
           const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/search`, {
@@ -1889,7 +1963,7 @@ export function apply(ctx, raw) {
           const detail = Array.isArray(data && data.errors) && data.errors.length > 0 ? `: ${JSON.stringify(data.errors[0]).slice(0, 200)}` : ''
           throw new Error(`memory ${ids[0]} was not deleted${detail}`)
         }
-        return { container, text: `Deleted memory ${ids[0]} in \`${container}\`.` }
+        return { container, text: `Forgotten memory ${ids[0]} in \`${container}\`; the server keeps an audit copy but stops recalling it.` }
       }
       const query = String(args.query || '').trim()
       if (!query) throw new Error('provide memoryId or query')
@@ -1907,7 +1981,7 @@ export function apply(ctx, raw) {
       const errors = Array.isArray(data && data.errors) ? data.errors : []
       const lines = [
         confirmed
-          ? `Semantic forget in \`${container}\`: ${count} memory(ies) deleted.`
+          ? `Semantic forget in \`${container}\`: ${count} memory(ies) forgotten (audit copies kept by the server).`
           : `Semantic forget in \`${container}\`: ${count} match(es), nothing deleted. Repeat with confirm: "delete" to remove them.`,
       ]
       for (const match of matches.slice(0, 20)) {
@@ -1990,11 +2064,11 @@ export function apply(ctx, raw) {
       render: (_args, value) => [{ type: 'text', text: value.text }],
     },
     async execute(args, exec) {
-      const container = await resolveReadContainer(args.container)
       const type = String(args.type || '')
       if (type !== 'documents' && type !== 'memories') throw new Error('type must be "documents" or "memories"')
-      const limit = Math.min(50, Math.max(1, Number(args.limit) || 10))
-      const page = Math.max(1, Number(args.page) || 1)
+      const container = await resolveReadContainer(args.container)
+      const limit = Math.min(50, Math.max(1, Math.floor(Number(args.limit)) || 10))
+      const page = Math.max(1, Math.floor(Number(args.page)) || 1)
       const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/list/${type}?page=${page}&limit=${limit}`, {
         method: 'POST',
         body: {},
@@ -2034,7 +2108,7 @@ export function apply(ctx, raw) {
     async execute(_args, exec) {
       let namespaces = []
       try {
-        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: 6000, signal: exec.signal })
+        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: settings.timeoutMs, signal: exec.signal })
         namespaces = data && Array.isArray(data.namespaces) ? data.namespaces : []
       } catch (error) {
         throw new Error(`Supermemory is unreachable at ${settings.baseUrl}: ${error instanceof Error ? error.message : String(error)}`)
@@ -2081,9 +2155,9 @@ export function apply(ctx, raw) {
       render: (_args, value) => [{ type: 'text', text: value.text }],
     },
     async execute(args, exec) {
-      const container = await resolveWriteContainer(args.container)
       const verdict = isUploadAllowed(settings, args.path)
       if (!verdict.allowed) throw new Error(verdict.reason)
+      const container = await resolveWriteContainer(args.container)
       const buffer = readVerifiedFile(verdict.realPath, settings.maxUploadBytes)
       const metadata = {
         sm_source: SOURCE,
@@ -2128,8 +2202,9 @@ export function apply(ctx, raw) {
     },
     async execute(args, exec) {
       const action = String(args.action || '')
+      if (action !== 'list' && action !== 'context' && action !== 'delete') throw new Error(`unknown action: ${action}`)
       if (action === 'list') {
-        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: 6000, signal: exec.signal })
+        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: settings.timeoutMs, signal: exec.signal })
         const namespaces = data && Array.isArray(data.namespaces) ? data.namespaces : []
         const lines = [`${namespaces.length} namespace(s) on ${settings.baseUrl}`]
         for (const entry of namespaces) {
@@ -2197,6 +2272,7 @@ export function apply(ctx, raw) {
       action: { type: 'string', required: true, enum: ['list', 'set', 'delete'], description: 'What to do.' },
       buckets: { type: 'string', description: 'For set: JSON object {slug: description}; slug matches ^[a-z0-9][a-z0-9_-]*$, description up to 2000 chars.' },
       names: { type: 'string', description: 'For delete: comma-separated bucket names.' },
+      confirm: { type: 'string', description: 'For delete: the literal word delete. Deleting a bucket is irreversible.' },
       container: { type: 'string', description: 'Namespace. Defaults to your own.' },
     },
     output: {
@@ -2216,6 +2292,9 @@ export function apply(ctx, raw) {
 
       if (action === 'delete') {
         if (!own) throw new Error('buckets can only be changed in your own namespace')
+        if (String(args.confirm || '').toLowerCase() !== 'delete') {
+          throw new Error('deleting a bucket is irreversible: repeat the call with confirm: "delete"')
+        }
         const names = String(args.names || '').split(',').map(item => item.trim()).filter(Boolean)
         if (names.length === 0) throw new Error('names is required for delete')
         const data = await api(ctx, settings, path, { method: 'DELETE', body: { buckets: names }, signal: exec.signal })

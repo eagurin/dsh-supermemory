@@ -34,9 +34,11 @@ test('a long session is clamped from the tail and marked', () => {
   }
   const plan = buildTranscriptChunks(fakeSession(messages), resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 10, minCaptureChars: 10 }))
   assert.ok(plan.chunked, 'a session over the budget must be chunked')
-  const last = plan.documents.at(-1).content
-  assert.match(last, /\(part \d+\)/)
-  assert.match(last, /ответ номер 39/)
+  // A chunk keeps its beginning (the user's request) and marks what was dropped.
+  const first = plan.documents[0].content
+  assert.match(first, /\(part \d+\)/)
+  assert.match(first, /вопрос номер 0/)
+  assert.match(first, /later content omitted/)
 })
 
 test('a session without a usable message list does not throw', () => {

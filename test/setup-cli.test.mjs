@@ -27,7 +27,7 @@ test('the human path prints a complete row and next steps', () => {
   }
   assert.match(result.stdout, /Next steps/)
   assert.match(result.stdout, /plugin_manager install_bundle/)
-  assert.match(result.stdout, /Settings → Plugins/)
+  assert.match(result.stdout, /Plugins → Add plugin/)
   assert.match(result.stdout, /credential store/)
 })
 

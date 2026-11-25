@@ -5,7 +5,7 @@ import { resolveSettings, DEFAULTS, CONFIG_KEYS } from './helpers.mjs'
 test('defaults are complete and stable', () => {
   const settings = resolveSettings({})
   assert.equal(settings.container, 'dsh')
-  assert.equal(settings.baseUrl, 'http://127.0.0.1:8787')
+  assert.equal(settings.baseUrl, 'http://127.0.0.1:6767')
   assert.deepEqual(settings.readContainers, [])
   assert.equal(settings.filter, undefined)
   assert.equal(settings.rewriteQuery, false)

@@ -17,24 +17,29 @@ Does:
 - **No credentials in the repository.** The bundle stores only the *name* of a
   credential reference (`SUPERMEMORY_API_KEY`); the value lives in the Host
   credential store (`$DSH_HOME/.credentials.yaml`) and is resolved per request.
-- **No credential in logs or errors.** Errors name the reference and the endpoint,
-  never the key; `scripts/check.mjs` fails the build on secret-looking strings.
+- **The key never appears in logs or errors.** The plugin never interpolates it; errors
+  name the reference and the endpoint. Server-provided error text is relayed up to 400
+  characters, so a hostile proxy could echo anything it chooses — the key is never sent
+  anywhere except as the `Authorization` header to `baseUrl`.
 - **Agent isolation by default.** The plugin writes only to its own namespace.
   Another agent's namespaces are readable only when explicitly listed in
-  `readContainers` (empty by default), `writeContainers` refuses a Hermes name,
+  `readContainers` or matched by `readPrefixes` (both empty by default), `writeContainers`
+  refuses a Hermes name,
   `allowWritesToReadContainers` never extends to one, and namespace deletion is an
   allowlist of writable namespaces with no `moveTo`.
 - **Recalled text cannot forge its own block.** The recall block is delimited by a
-  fresh random nonce per turn; control characters, closing tags and heading
-  markers are stripped from recalled facts and profile text before they are shown.
+  fresh random nonce per turn; control characters, the legacy `<supermemory-context>`
+  tag, forged `<<<supermemory-…>>>` shapes and leading `##` heading markers are stripped
+  from recalled facts and profile text before they are shown.
 - **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`,
   `Bearer …`, PEM blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a
   transcript is sent.
-- **Uploads are off by default**, confined to `uploadRoots`, opened with
-  `O_NOFOLLOW`, required to have a single hard link, and read through that
-  descriptor with a byte cap.
-- **Irreversible actions take two steps.** `supermemory_forget` previews first and
-  deletes only with `confirm: "delete"`; namespace deletion needs the same.
+- **Uploads are off by default**, confined to `uploadRoots`, required to have a single
+  hard link, opened with `O_NOFOLLOW` where the platform provides it (Windows falls back
+  to a plain open after the link check), and read through that descriptor with a byte cap.
+- **Destructive actions take two steps.** `supermemory_forget` previews description
+  matches and deletes only with `confirm: "delete"` (deleting by memory id needs the same
+  confirmation without a preview); namespace and bucket deletion require it too.
 - **No dependency runs code at install time.** The only dependency is
   `@deepseek-ai/schemastery` (the Config schema), with no
   `preinstall`/`install`/`postinstall` scripts in its tree.

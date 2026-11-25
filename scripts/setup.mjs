@@ -9,7 +9,7 @@
  * here (it belongs in the credential store).
  *
  * Usage:
- *   node scripts/setup.mjs                 # asks, probes 127.0.0.1:6767
+ *   node scripts/setup.mjs                 # asks, probes 127.0.0.1:6767 then 127.0.0.1:8787
  *   node scripts/setup.mjs --json          # machine-readable plan, no prompts
  *   node scripts/setup.mjs --mode cloud --base-url https://api.supermemory.ai
  *   node scripts/setup.mjs --mode local --container dsh --read-containers hermes_default,hermes
@@ -27,9 +27,9 @@ import { internals } from '../index.js'
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version
 
-// `npx supermemory local start` listens on PORT or 8787; Hermes setups often run it
-// on 6767, so both are probed before asking the operator to choose.
-const LOCAL_CANDIDATES = ['http://127.0.0.1:8787', 'http://127.0.0.1:6767']
+// `npx supermemory local start` listens on PORT or 6767 in current releases (older
+// ones used 8787), so both are probed before asking the operator to choose.
+const LOCAL_CANDIDATES = ['http://127.0.0.1:6767', 'http://127.0.0.1:8787']
 const LOCAL_DEFAULT = LOCAL_CANDIDATES[0]
 const CLOUD_DEFAULT = 'https://api.supermemory.ai'
 
@@ -243,7 +243,7 @@ async function main() {
     console.log('\n== Next steps ==\n')
     console.log('  1. Install the bundle (it inserts its own row, so nothing has to be pasted):')
     console.log(`       ask the agent: plugin_manager install_bundle -> git+https://github.com/eagurin/dsh-supermemory.git#v${PACKAGE_VERSION}`)
-    console.log('       or GUI: Settings → Plugins → Install from URL (Desktop has no `dsh` command)')
+    console.log('       or GUI: Plugins → Add plugin, pasting the spec into the address field (Desktop has no `dsh` command)')
     console.log(`  2. Put the key into the DSH credential store under ${plan.apiKeyRef}:`)
     console.log('       $DSH_HOME/.credentials.yaml → version: 1, refs: { ' + plan.apiKeyRef + ': <key> }')
     console.log(`       ${mode === 'cloud' ? '(key from https://console.supermemory.ai)' : '(local: cat ~/.supermemory/api-key)'}`)

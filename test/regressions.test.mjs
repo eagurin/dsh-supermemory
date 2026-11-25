@@ -262,3 +262,82 @@ test('a surface that shrinks does not delete parts', async () => {
     host.restore()
   }
 })
+
+test('an over-long single turn still produces a document with content', () => {
+  const messages = [turn('Z'.repeat(200000)), answer('ok')]
+  const settings = resolveSettings({ maxCaptureChars: 5000, minCaptureChars: 5 })
+  const plan = buildTranscriptChunks(session('session-huge', messages), settings)
+  assert.equal(plan.documents.length, 1)
+  const body = plan.documents[0].content.split('## Conversation')[1] || ''
+  assert.ok(body.trim().length > 0, 'the document body was empty')
+  assert.match(plan.documents[0].content, /Z{100}/)
+})
+
+test('two checkpoints with the same summary text land in different families', () => {
+  const settings = resolveSettings({ minCaptureChars: 5 })
+  const first = buildTranscriptChunks(session('session-cp2', [
+    checkpoint('same summary text', undefined),
+    turn('first follow-up'),
+    answer('a'),
+  ]), settings)
+  const second = buildTranscriptChunks(session('session-cp2', [
+    checkpoint('same summary text', undefined),
+    turn('first follow-up'),
+    answer('a'),
+    checkpoint('same summary text', undefined),
+    turn('second follow-up'),
+    answer('b'),
+  ]), settings)
+  assert.notEqual(first.family, second.family, 'two compactions collapsed into one family')
+  assert.notEqual(first.family, 'g0')
+})
+
+test('session ids that sanitize to the same text do not share a document', () => {
+  const settings = resolveSettings({ minCaptureChars: 5 })
+  const a = buildTranscriptChunks(session('session/a', [turn('hello there'), answer('hi')]), settings)
+  const b = buildTranscriptChunks(session('session a', [turn('hello there'), answer('hi')]), settings)
+  assert.notEqual(a.documents[0].documentId, b.documents[0].documentId)
+})
+
+test('a non-array deriveMessages result is contained, not thrown', () => {
+  const settings = resolveSettings({ minCaptureChars: 5 })
+  const broken = { id: 'session-null', header: {}, deriveMessages: () => null }
+  assert.deepEqual(buildTranscriptChunks(broken, settings).documents, [])
+})
+
+test('tool execute tolerates a missing argument bag instead of throwing a TypeError', async () => {
+  const host = await createHost()
+  try {
+    const tool = host.tools.get('supermemory_list')
+    await assert.rejects(() => tool.execute(undefined, { signal: new AbortController().signal }), /missing required argument/)
+    const search = host.tools.get('supermemory_search')
+    await assert.rejects(() => search.execute(null, { signal: new AbortController().signal }), /missing required argument/)
+  } finally {
+    host.restore()
+  }
+})
+
+test('an invalid filter is rejected before any network call', async () => {
+  const host = await createHost({ config: { readPrefixes: ['hermes'] } })
+  try {
+    const tool = host.tools.get('supermemory_search')
+    await assert.rejects(
+      () => tool.execute({ query: 'x', filter: '{"field":"type","operator":"bogus","value":"x"}' }, { signal: new AbortController().signal }),
+      /unsupported operator/,
+    )
+    assert.equal(host.calls.length, 0, `validation made ${host.calls.length} request(s)`)
+  } finally {
+    host.restore()
+  }
+})
+
+test('search reports a memory id only for real memories, never for chunks', () => {
+  const facts = internals.mergeFacts([
+    { container: 'dsh', results: [
+      { memory: 'a real memory row with enough length', id: 'mem-1', similarity: 0.9 },
+      { chunk: 'a chunk row with enough length here', id: 'chunk-1', similarity: 0.8 },
+    ] },
+  ], 5)
+  assert.equal(facts.find(fact => fact.text.startsWith('a real')).memoryId, 'mem-1')
+  assert.equal(facts.find(fact => fact.text.startsWith('a chunk')).memoryId, undefined)
+})

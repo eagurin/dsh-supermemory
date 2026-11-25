@@ -5,9 +5,10 @@
 ## Что это
 
 Плагин-бандл DSH: долговременная память на официальном Supermemory API v5.
-Один namespace для записи, чужие namespace — только на чтение. Плагин не
-переносит данные и не меняет настройки сервера: он читает и пишет документы через
-публичный API.
+Один namespace для записи, чужие namespace — только на чтение. Плагин не переносит
+данные между namespace; серверное состояние он меняет только явными инструментами
+`supermemory_namespace` (`supportingContext`, удаление) и `supermemory_buckets`;
+документы он читает и пишет через публичный API.
 
 ## Перед установкой
 
@@ -17,7 +18,7 @@
 - Для этого есть `node scripts/setup.mjs`: он пробует локальный сервер, спрашивает, если его нет, и печатает
   готовую строку Loader'а. `--json` даёт машинный план, `--mode local|cloud` — ответ без вопросов.
 - Установка — `plugin_manager install_bundle` с `git+https://github.com/eagurin/dsh-supermemory.git#vX.Y.Z`
-  (в DSH Desktop нет команды `dsh`) либо GUI **Settings → Plugins → Install from URL**; бандл сам вставляет свою
+  (в DSH Desktop нет команды `dsh`) либо GUI **Plugins → Add plugin** (вставить spec в поле **Package name or address**); бандл сам вставляет свою
   строку. Строка `- id: supermemory` — это оверрайд, она не устанавливает плагин на чистом профиле; для ручной
   установки нужен `insert`.
 - Оверрайд заменяет `config` бандла, а пропущенные ключи берут значения по умолчанию. Не рассчитывай, что
@@ -31,9 +32,11 @@
   (`SUPERMEMORY_API_KEY`) и `${credential:…}` в конфигурации. Значения ключей,
   `~/.dsh/.credentials.yaml`, `api-key` локального сервера — никогда, ни в файлы,
   ни в чат, ни в коммит.
-- **Официальный API.** Только задокументированные маршруты v5 (`/ns/{ns}/search`,
-  `/ns/{ns}/document`, `/ns/{ns}/memories`, `/ns/{ns}/list/documents`). При
-  сомнении — документация Supermemory, не догадки.
+- **Официальный API.** Только задокументированные маршруты v5, например `/ns`,
+  `/ns/{ns}/search`, `/ns/{ns}/document`, `/ns/{ns}/document/file`,
+  `/ns/{ns}/memories`, `/ns/{ns}/memories/semantic`, `/ns/{ns}/list/{type}`,
+  `/ns/{ns}/profile`, `/ns/{ns}/profile/buckets`. При сомнении — документация
+  Supermemory, не догадки.
 - **Зависимостей почти нет.** Runtime — только `node:` builtin'ы, плюс одна
   объявленная зависимость `@deepseek-ai/schemastery` (схема конфига), в дереве
   которой нет install-скриптов. Новую зависимость добавлять только с причиной в
@@ -44,7 +47,7 @@
 Эти свойства — часть контракта, а не деталь реализации. Меняя код, сохраняй их:
 
 - блок recall ограничен одноразовым nonce на ход; из подмешиваемого текста вычищаются управляющие символы,
-  закрывающие теги и заголовки (`sanitizeUntrusted`);
+  устаревший тег `<supermemory-context>`, поддельные `<<<supermemory-…>>>` и заголовки `##` (`sanitizeUntrusted`);
 - захват проходит через `redactSecrets` до отправки;
 - запись — только в свои namespace: `writeContainers` не может назвать гермесов, удаление namespace — allowlist
   без `moveTo`;

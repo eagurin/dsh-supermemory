@@ -12,9 +12,9 @@
     - id: supermemory
       name: '@local/dsh-supermemory'
       config:
-        # The local server's own default port. Hermes setups often run it on 6767:
-        # change this value (or override `baseUrl`) if your server listens there.
-        baseUrl: http://127.0.0.1:8787
+        # Current `npx supermemory local start` listens on 6767 (older releases used
+        # 8787). Change this value if your server runs on another port.
+        baseUrl: http://127.0.0.1:6767
         container: dsh
         # Cross-agent memory is opt-in: list another agent's namespaces here if you
         # want them recalled (read-only). Empty by default, so a fresh install

@@ -199,6 +199,20 @@ test('supermemory_forget previews before deleting', async () => {
   }
 })
 
+test('bucket deletion needs a confirm', async () => {
+  const host = await createHost()
+  try {
+    const tool = host.tools.get('supermemory_buckets')
+    await assert.rejects(
+      () => tool.execute({ action: 'delete', names: 'probe' }, { signal: new AbortController().signal }),
+      /without confirm|confirm: "delete"/,
+    )
+    assert.equal(host.calls.some(call => call.method === 'DELETE'), false)
+  } finally {
+    host.restore()
+  }
+})
+
 test('supermemory_list rejects an unknown type instead of silently listing documents', async () => {
   const host = await createHost()
   try {
@@ -268,7 +282,7 @@ test('forget by id reports a refused deletion instead of claiming success', asyn
   try {
     const tool = host.tools.get('supermemory_forget')
     const ok = await tool.execute({ memoryId: 'mem-1', confirm: 'delete' }, { signal: new AbortController().signal })
-    assert.match(ok.text, /Deleted memory mem-1/)
+    assert.match(ok.text, /Forgotten memory mem-1/)
 
     response = { body: { count: 0, errors: [{ id: 'mem-2', error: 'Memory not found' }] } }
     await assert.rejects(

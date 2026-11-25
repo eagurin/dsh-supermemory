@@ -17,9 +17,11 @@ test('clampLines keeps the tail when asked', () => {
 test('clampLines never returns an empty string', () => {
   assert.equal(clampLines(['a very long single line'], 5), 'a ver')
   assert.equal(clampLines(['a very long single line'], 40), 'a very long single line')
-  const clamped = clampLines(['x'.repeat(100)], 30)
-  assert.equal(clamped.length, 30)
-  assert.ok(clamped.endsWith('…[truncated]'))
+  // One line longer than the whole budget keeps its head (or tail), never nothing:
+  // an empty body used to become an empty document.
+  assert.equal(clampLines(['x'.repeat(100)], 30).length, 30)
+  assert.equal(clampLines(['y'.repeat(100)], 30, 'tail'), 'y'.repeat(30))
+  assert.equal(clampLines(['', '  ', 'ok'], 10), 'ok')
 })
 
 test('resultText normalizes whitespace and accepts every field name', () => {

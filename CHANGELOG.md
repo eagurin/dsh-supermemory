@@ -4,6 +4,78 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-11-25
+
+Five independent live audits (real server, real hooks, clean-room install, edge-case
+fuzzing, documentation) found the defects below. This release fixes them; it is the
+first version I would hand to a stranger without caveats.
+
+### Fixed — memory integrity
+
+- **An over-long single turn no longer produces an empty document.** `clampLines` dropped
+  the only line when it did not fit, so a 200 KB turn yielded a header-only document — and
+  the capture then retired the previous good one. A chunk now keeps its beginning and
+  marks what it dropped.
+- **A compaction checkpoint without an id no longer re-uses the original document
+  family** (which would overwrite the pre-compaction document). The family identity falls
+  back to `source.compactionId`, the summary text, then the ordinal, so two id-less
+  checkpoints with identical text also land in different families.
+- **Two session ids that sanitize to the same string no longer share a document**
+  (`a/b` vs `a b`, or a 300-char id): such ids get a short hash suffix, while ordinary
+  UUID sessions keep their ids.
+- **`deriveMessages()` returning a non-array no longer loses the capture** with a raw
+  `TypeError`; the flush is also guarded against running after plugin disposal.
+
+### Fixed — live behaviour
+
+- **Recall honours one deadline.** `recallTimeoutMs` was applied per request (discovery
+  + profile + search), so a cold server stalled the first turn for ~9 s and then lost the
+  recall. Discovery, profiles and searches now share the remaining budget.
+- **A long fact is truncated instead of dropped**, so a 998-char fact no longer leaves an
+  empty section when the block budget is small.
+- **Namespace discovery failures are no longer cached** for 60 s (which silently removed
+  whole namespaces from search and recall) and are logged.
+- **Network failures say where they failed** (`cannot reach Supermemory at <baseUrl>:
+  ECONNREFUSED`) instead of a bare `fetch failed`.
+- **`timeoutMs` is honoured** by the namespace tools, search discovery and uploads instead
+  of the hard-coded 4 s/6 s/60 s budgets.
+- **Argument validation happens before network I/O**: an invalid filter, list type or
+  upload policy no longer costs a discovery request.
+- **Search reports a memory id only for real memories**, not for hybrid-mode chunk rows
+  that `supermemory_forget` cannot delete.
+- **Unknown tool actions are reported as unknown** instead of a misleading argument error.
+- **Bucket deletion now requires `confirm: "delete"`**, like the other destructive actions.
+- **The default `baseUrl` is `127.0.0.1:6767`**, which is where current
+  `npx supermemory local start` listens; `8787` (older releases) is still probed by the
+  setup script.
+
+### Fixed — documentation
+
+The audit verified every claim against the code and found several wrong ones, all
+corrected: the GUI control is **Plugins → Add plugin** (there is no "Install from URL");
+the local server's default port is 6767; `- id:` is an override that DSH *warns* about on
+a fresh profile rather than rejecting; the credential store needs `chmod 600`; the
+sanitizer strips the legacy tag and heading markers, not arbitrary closing tags;
+`forget` by memory id has no preview; bucket deletion is immediate (now confirmed);
+`ARCHITECTURE.md` no longer claims that `allowWritesToReadContainers` can open Hermes, that
+the plugin never changes server state, that a shrinking session deletes parts, that
+`dryRun` is a tool parameter, or that recall carries document ids. Both READMEs now say
+where the `scripts/…` commands run (a checkout), that the dependency is required, and that
+a Finder-launched app does not inherit shell exports.
+
+### Verified live
+
+- Real root sessions: recall is injected **after** the user request with a per-turn
+  nonce, and the request reaches the model (a scheduler-opened session answered normally);
+  both probe sessions were captured with `status: done`.
+- Compaction on a real server: a new document family appears, no DELETE is issued, and all
+  pre-compaction parts still exist afterwards.
+- Shrink safety: a truncated surface issues no DELETE and keeps every part.
+- Retry policy: a 401 is attempted once; a 500 retries up to `captureRetries`.
+- Profile failure: `/profile` returning 500 still yields a decision and an injected block.
+- Uploads: outside-root, symlink and hard-link paths refused; a real file reaches `done`.
+- 100 unit tests; `check.mjs`; `node --check`.
+
 ## [0.5.4] — 2026-11-25
 
 ### Fixed
@@ -55,8 +127,7 @@ exist on a Desktop install.
   installation ships only the application, so `dsh plugin …` is not on `PATH`; the
   documented command failed before any plugin work started. The three paths that
   actually exist are now documented in order: ask the agent
-  (`plugin_manager install_bundle` with the git spec), the GUI (*Settings → Plugins →
-  Install from URL*), and the npm CLI (`npx @deepseek-ai/dsh plugin …`) only for
+  (`plugin_manager install_bundle` with the git spec), the GUI (*Plugins → Add plugin*), and the npm CLI (`npx @deepseek-ai/dsh plugin …`) only for
   people who have it. The same correction is in the Russian mirror, in
   `scripts/setup.mjs` next steps, and in `AGENTS.md`.
 - The row-by-hand section now states that `- id: supermemory` is an override and
