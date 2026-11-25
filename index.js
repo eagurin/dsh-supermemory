@@ -20,6 +20,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { basename, extname, resolve, sep } from 'node:path'
 
 export const name = 'supermemory'
 
@@ -76,6 +78,14 @@ const DEFAULTS = {
   rewriteQuery: false,
   /** How long a save waits for the document to be processed before returning. */
   ingestWaitMs: 1500,
+  /** Turns per document when a session is too large for one; 0 keeps the whole session in one. */
+  captureTurnsPerChunk: 25,
+  /** Allow `supermemory_upload_file` to read local files at all. */
+  allowFileUpload: false,
+  /** Directories an upload may read from; empty means none, even when uploads are allowed. */
+  uploadRoots: [],
+  /** Largest file an upload may send, in bytes. */
+  maxUploadBytes: 20971520,
 }
 
 /** Every key the Loader row may set; anything else is a typo and fails loudly. */
@@ -118,6 +128,10 @@ export const Config = schema === undefined ? undefined : schema.object({
   filter: schema.string().default(DEFAULTS.filter).description('Metadata filter (JSON) applied to recall in the own namespace'),
   rewriteQuery: schema.boolean().default(DEFAULTS.rewriteQuery).description('Let the server rewrite the recall query'),
   ingestWaitMs: schema.number().default(DEFAULTS.ingestWaitMs).description('How long a save waits for processing'),
+  captureTurnsPerChunk: schema.number().default(DEFAULTS.captureTurnsPerChunk).description('Turns per document when a session is split'),
+  allowFileUpload: schema.boolean().default(DEFAULTS.allowFileUpload).description('Allow supermemory_upload_file to read local files'),
+  uploadRoots: schema.array(schema.string()).default(DEFAULTS.uploadRoots).description('Directories an upload may read from'),
+  maxUploadBytes: schema.number().default(DEFAULTS.maxUploadBytes).description('Largest upload, in bytes'),
 }).description('Supermemory long-term memory for DeepSeek Harness')
 
 /**
@@ -226,6 +240,10 @@ function resolveSettings(raw) {
   settings.filter = normalizeFilter(input.filter, 'filter')
   settings.rewriteQuery = bool(input.rewriteQuery, false)
   settings.ingestWaitMs = Math.round(num(input.ingestWaitMs, 1500, 0, 30000))
+  settings.captureTurnsPerChunk = Math.round(num(input.captureTurnsPerChunk, 25, 1, 500))
+  settings.allowFileUpload = bool(input.allowFileUpload, false)
+  settings.uploadRoots = list(input.uploadRoots, DEFAULTS.uploadRoots).map(root => root.replace(/\/+$/, ''))
+  settings.maxUploadBytes = Math.round(num(input.maxUploadBytes, 20971520, 1024, 268435456))
   return settings
 }
 
@@ -568,6 +586,16 @@ async function waitForIngest(ctx, settings, container, documentId, signal) {
   }
 }
 
+/** Render the bucket map returned by the profile-buckets endpoints. */
+function renderBuckets(container, data) {
+  const buckets = data && data.buckets && typeof data.buckets === 'object' ? data.buckets : {}
+  const names = Object.keys(buckets)
+  if (names.length === 0) return `No profile buckets in \`${container}\`.`
+  const lines = [`Profile buckets in \`${container}\` — ${names.length}`]
+  for (const name of names.sort()) lines.push(`- \`${name}\` · ${String(buckets[name]).slice(0, 160)}`)
+  return lines.join('\n')
+}
+
 /** Human sentence for one ingest status. */
 function ingestText(status) {
   if (status === 'done') return 'processed: its memories and profile are searchable now'
@@ -758,6 +786,123 @@ function buildTranscript(session, settings) {
 }
 
 /**
+ * Split a session into capture units: one segment per human turn (the turn's
+ * messages), so chunks can be cut on turn boundaries instead of mid-sentence.
+ * @param {any} session - live Session.
+ * @returns {{segments: string[][], turns: number}} rendered lines per turn.
+ */
+function buildTranscriptSegments(session) {
+  let messages = []
+  try {
+    messages = session.deriveMessages()
+  } catch {
+    messages = []
+  }
+  const segments = []
+  let current = null
+  let turns = 0
+  for (const message of messages) {
+    if (!message) continue
+    if (message.role === 'user') {
+      if (!message.source || message.source.kind !== 'user') continue
+      const text = messageText(message)
+      if (!text) continue
+      turns += 1
+      current = [`**User:** ${text}`, '']
+      segments.push(current)
+      continue
+    }
+    if (message.role === 'assistant') {
+      const text = messageText(message)
+      if (!text) continue
+      if (!current) {
+        // An assistant message before any human turn: keep it, it is still context.
+        current = [`**Assistant:** ${text}`, '']
+        segments.push(current)
+        continue
+      }
+      current.push(`**Assistant:** ${text}`, '')
+    }
+  }
+  return { segments, turns }
+}
+
+/** Header shared by every captured document. */
+function transcriptHeader(session, turns, part) {
+  const header = session.header && typeof session.header === 'object' ? session.header : {}
+  const title = part === undefined
+    ? `# DeepSeek Harness conversation ${session.id}`
+    : `# DeepSeek Harness conversation ${session.id} (part ${part})`
+  return [
+    title,
+    '',
+    `- agent: DeepSeek Harness (${SOURCE})`,
+    `- session: ${session.id}`,
+    header.cwd ? `- workspace: ${header.cwd}` : '',
+    `- updated: ${new Date().toISOString()}`,
+    `- user turns: ${turns}`,
+    '',
+    '## Conversation',
+    '',
+  ].filter(line => line !== '').join('\n')
+}
+
+/** Render one capture unit, clamped and aligned to a role marker. */
+function renderChunk(session, settings, segmentLines, turns, part, parts) {
+  const header = transcriptHeader(session, turns, part === undefined ? undefined : `${part} of ${parts}`)
+  let body = clampLines(segmentLines.flat(), settings.maxCaptureChars, 'tail')
+  const firstUser = body.indexOf('**User:**')
+  const firstAssistant = body.indexOf('**Assistant:**')
+  const start = firstUser === -1 ? firstAssistant : (firstAssistant === -1 ? firstUser : Math.min(firstUser, firstAssistant))
+  if (start > 0) body = `…[earlier turns omitted]\n\n${body.slice(start)}`
+  return `${header}\n${body}`
+}
+
+/**
+ * Build every document one session should own.
+ *
+ * A session that fits in `maxCaptureChars` stays a single document, so existing
+ * memories keep their identity. A session that does not fit is split on turn
+ * boundaries into `dsh-<sessionId>-p1…pN`: the previous behaviour kept only the
+ * tail of a long session, which silently dropped its beginning.
+ *
+ * @param {any} session - live Session.
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @returns {{documents: Array<{documentId: string, content: string, metadata: object, turns: number}>, chunked: boolean, turns: number, obsolete: string[]}} capture plan.
+ */
+function buildTranscriptChunks(session, settings) {
+  const sessionId = String(session.id).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
+  const legacyId = `dsh-${sessionId}`
+  const { segments, turns } = buildTranscriptSegments(session)
+  if (segments.length === 0) return { documents: [], chunked: false, turns: 0, obsolete: [] }
+
+  const single = renderChunk(session, settings, segments, turns)
+  if (single.length <= settings.maxCaptureChars) {
+    if (single.length < settings.minCaptureChars) return { documents: [], chunked: false, turns, obsolete: [] }
+    return { documents: [{ documentId: legacyId, content: single, metadata: {}, turns }], chunked: false, turns, obsolete: [] }
+  }
+
+  // Too large for one document: cut on turn boundaries, never mid-turn.
+  const per = Math.max(1, settings.captureTurnsPerChunk)
+  const groups = []
+  for (let index = 0; index < segments.length; index += per) groups.push(segments.slice(index, index + per))
+  const documents = groups.map((group, index) => {
+    const part = index + 1
+    const groupTurns = group.filter(lines => lines[0] && lines[0].startsWith('**User:**')).length
+    const first = index * per + 1
+    return {
+      documentId: `${legacyId}-p${part}`,
+      content: renderChunk(session, settings, group, groupTurns, part, groups.length),
+      metadata: { part, parts: groups.length, from_turn: first, to_turn: first + groupTurns - 1 },
+      turns: groupTurns,
+    }
+  })
+  // The single document of a previous, shorter capture would otherwise duplicate
+  // every fact the parts now carry.
+  return { documents, chunked: true, turns, obsolete: [legacyId] }
+}
+
+/**
  * Idempotent document write: PATCH the document, falling back to POST with the
  * same id when the document does not exist yet.
  * @param {object} ctx - plugin context.
@@ -785,6 +930,157 @@ async function upsertDocument(ctx, settings, container, documentId, content, met
   })
 }
 
+/** MIME types an upload may declare, keyed by extension. */
+const UPLOAD_MIME = {
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.csv': 'text/csv',
+  '.html': 'text/html',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.odt': 'application/vnd.oasis.opendocument.text',
+  '.rtf': 'application/rtf',
+  '.epub': 'application/epub+zip',
+}
+
+/**
+ * Decide whether a local file may be sent to the server.
+ *
+ * Uploading reads the operator's disk, so it is off by default and, when on, it
+ * is confined to explicitly listed roots: a prompt-injected agent must not be
+ * able to exfiltrate `~/.ssh/id_rsa` through the memory server.
+ *
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @param {string} filePath - requested path.
+ * @returns {{allowed: boolean, reason?: string, realPath?: string, size?: number, mime?: string, name?: string}} the verdict.
+ */
+function isUploadAllowed(settings, filePath) {
+  if (!settings.allowFileUpload) {
+    return { allowed: false, reason: 'file uploads are disabled; set allowFileUpload: true and list uploadRoots to enable them' }
+  }
+  if (settings.uploadRoots.length === 0) {
+    return { allowed: false, reason: 'no uploadRoots configured; uploads are confined to those directories by design' }
+  }
+  let real
+  try {
+    real = realpathSync(resolve(String(filePath)))
+  } catch {
+    return { allowed: false, reason: `file does not exist: ${filePath}` }
+  }
+  const inside = settings.uploadRoots.some(root => {
+    let realRoot
+    try {
+      realRoot = realpathSync(resolve(root))
+    } catch {
+      return false
+    }
+    return real === realRoot || real.startsWith(`${realRoot}${sep}`)
+  })
+  if (!inside) {
+    return { allowed: false, reason: `file is outside uploadRoots (${settings.uploadRoots.join(', ')}): ${real}` }
+  }
+  let stats
+  try {
+    stats = statSync(real)
+  } catch {
+    return { allowed: false, reason: `cannot stat ${real}` }
+  }
+  if (!stats.isFile()) return { allowed: false, reason: `not a regular file: ${real}` }
+  if (stats.size > settings.maxUploadBytes) {
+    return { allowed: false, reason: `file is ${stats.size} bytes, above maxUploadBytes (${settings.maxUploadBytes})` }
+  }
+  const extension = extname(real).toLowerCase()
+  return {
+    allowed: true,
+    realPath: real,
+    size: stats.size,
+    mime: UPLOAD_MIME[extension] || 'application/octet-stream',
+    name: basename(real),
+  }
+}
+
+/**
+ * POST a multipart body (the file-ingest endpoint is the only one that needs it).
+ * @param {object} ctx - plugin context.
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @param {string} path - path after the base URL.
+ * @param {FormData} form - prepared form.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<any>} parsed JSON.
+ */
+async function apiMultipart(ctx, settings, path, form, signal) {
+  const key = await resolveApiKey(ctx, settings)
+  if (!key) throw new Error(`Supermemory API key is not configured: credential reference ${settings.apiKeyRef} is empty.`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(settings.timeoutMs, 60000))
+  const relayAbort = () => controller.abort()
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', relayAbort, { once: true })
+  }
+  try {
+    const response = await fetch(`${settings.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, Accept: 'application/json', 'x-sm-source': SOURCE },
+      body: form,
+      signal: controller.signal,
+    })
+    const raw = await response.text()
+    let data = null
+    if (raw) {
+      try {
+        data = JSON.parse(raw)
+      } catch {
+        data = raw
+      }
+    }
+    if (!response.ok) {
+      const detail = data && typeof data === 'object'
+        ? (Array.isArray(data.error) ? data.error.map(e => e.message ?? JSON.stringify(e)).join('; ') : data.error || data.message)
+        : raw
+      const error = new Error(`Supermemory POST ${path} failed with ${response.status}${detail ? `: ${detail}` : ''}`)
+      error.status = response.status
+      throw error
+    }
+    return data
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', relayAbort)
+  }
+}
+
+/**
+ * Delete documents by id, ignoring ids the server does not know.
+ * @param {object} ctx - plugin context.
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @param {string} container - namespace holding the documents.
+ * @param {string[]} ids - document ids.
+ * @returns {Promise<number>} how many the server reported deleted.
+ */
+async function deleteDocuments(ctx, settings, container, ids) {
+  const unique = [...new Set(ids.filter(id => typeof id === 'string' && id.length > 0))].slice(0, 100)
+  if (unique.length === 0) return 0
+  try {
+    const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/document`, {
+      method: 'DELETE',
+      body: { ids: unique },
+      timeoutMs: settings.timeoutMs,
+    })
+    return typeof data?.count === 'number' ? data.count : unique.length
+  } catch (error) {
+    // A 404 means the documents are already gone: not an error worth a retry.
+    if (error.status === 404) return 0
+    throw error
+  }
+}
+
 /**
  * Register tools, the prompt section, recall, and capture.
  * @param {object} ctx - Host Cordis context.
@@ -810,8 +1106,11 @@ export const internals = {
   messageText,
   lastUserMessage,
   buildTranscript,
+  buildTranscriptSegments,
+  buildTranscriptChunks,
   ingestText,
   writableContainers,
+  isUploadAllowed,
 }
 
 export function apply(ctx, raw) {
@@ -923,7 +1222,7 @@ export function apply(ctx, raw) {
   // --------------------------------------------------------------- capture ----
   if (settings.autoCapture) {
     const flush = async (sessionId, captured) => {
-      const state = captureState.get(sessionId) || { timer: null, hash: '', attempts: 0, session: undefined }
+      const state = captureState.get(sessionId) || { timer: null, hashes: new Map(), attempts: 0, session: undefined }
       state.timer = null
       captureState.set(sessionId, state)
       const sessions = ctx.get('sessions')
@@ -933,24 +1232,45 @@ export function apply(ctx, raw) {
         || (sessions && typeof sessions.get === 'function' ? sessions.get(sessionId) : undefined)
       if (!session) return
       if (session.header && session.header.origin === 'subagent' && !settings.captureSubagents) return
-      const { content, turns } = buildTranscript(session, settings)
-      if (!content) return
-      const hash = createHash('sha256').update(content).digest('hex')
-      if (hash === state.hash) return
-      const documentId = `dsh-${String(sessionId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)}`
-      const metadata = {
+
+      const plan = buildTranscriptChunks(session, settings)
+      if (plan.documents.length === 0) return
+
+      const baseMetadata = {
         sm_source: SOURCE,
         source_agent: 'deepseek-harness',
         type: 'conversation',
         session_id: String(sessionId),
-        turns,
         updated_at: new Date().toISOString(),
       }
-      if (session.header && session.header.cwd) metadata.workspace = String(session.header.cwd)
+      if (session.header && session.header.cwd) baseMetadata.workspace = String(session.header.cwd)
+
       try {
-        await upsertDocument(ctx, settings, settings.container, documentId, content, metadata)
-        state.hash = hash
+        let written = 0
+        for (const document of plan.documents) {
+          const hash = createHash('sha256').update(document.content).digest('hex')
+          if (state.hashes.get(document.documentId) === hash) continue
+          await upsertDocument(ctx, settings, settings.container, document.documentId, document.content, {
+            ...baseMetadata,
+            turns: document.turns,
+            ...(plan.chunked ? { chunked: true, ...document.metadata } : {}),
+          })
+          state.hashes.set(document.documentId, hash)
+          written += 1
+        }
+        // Drop what this session no longer owns: the single document of an
+        // earlier shorter capture, and parts left over after compaction shrank
+        // the session.
+        const live = new Set(plan.documents.map(document => document.documentId))
+        const stale = [...state.hashes.keys()].filter(id => !live.has(id)).concat(plan.obsolete)
+        if (stale.length > 0) {
+          await deleteDocuments(ctx, settings, settings.container, stale)
+          for (const id of stale) state.hashes.delete(id)
+        }
         state.attempts = 0
+        if (written > 0 || stale.length > 0) {
+          log('debug', `captured ${sessionId}: ${plan.documents.length} document(s), ${written} written, ${stale.length} removed`)
+        }
       } catch (error) {
         state.attempts += 1
         log('debug', `capture failed for ${sessionId} (attempt ${state.attempts}): ${error instanceof Error ? error.message : String(error)}`)
@@ -967,7 +1287,7 @@ export function apply(ctx, raw) {
       const sessionId = String(session.id)
       const existing = captureState.get(sessionId)
       if (existing && existing.timer) clearTimeout(existing.timer)
-      const state = existing || { timer: null, hash: '', attempts: 0, session: undefined }
+      const state = existing || { timer: null, hashes: new Map(), attempts: 0, session: undefined }
       state.attempts = 0
       state.session = session
       state.timer = setTimeout(() => { void flush(sessionId, session) }, settings.captureDebounceMs)
@@ -1359,6 +1679,180 @@ export function apply(ctx, raw) {
         lines.push(`- \`${name}\` · ${label} · ${access} · ${docs} docs · ${memories} memories`)
       }
       return { text: clampLines(lines, 8000, 'head') }
+    },
+  })
+
+  ctx.tools.register({
+    name: 'supermemory_upload_file',
+    description: 'Send a local file (PDF, image, text, office document) into Supermemory memory and return its processing status. Disabled unless allowFileUpload is on and uploadRoots lists the directories it may read from.',
+    parameters: {
+      path: { type: 'string', required: true, description: 'Absolute path to the file. Must be inside uploadRoots.' },
+      title: { type: 'string', description: 'Short title stored in metadata.' },
+      context: { type: 'string', description: 'What to focus on when extracting memories from this file (max 1500 chars).' },
+      container: { type: 'string', description: 'Writable namespace. Defaults to your own.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          container: { type: 'string' },
+          documentId: { type: 'string' },
+          status: { type: 'string' },
+          text: { type: 'string' },
+        },
+        required: ['container', 'documentId', 'status', 'text'],
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args, exec) {
+      const container = await resolveWriteContainer(args.container)
+      const verdict = isUploadAllowed(settings, args.path)
+      if (!verdict.allowed) throw new Error(verdict.reason)
+      const buffer = readFileSync(verdict.realPath)
+      const metadata = {
+        sm_source: SOURCE,
+        source_agent: 'deepseek-harness',
+        type: 'file',
+        file_name: verdict.name,
+        bytes: verdict.size,
+      }
+      if (args.title) metadata.title = String(args.title).slice(0, 200)
+      const form = new FormData()
+      form.set('file', new Blob([buffer], { type: verdict.mime }), verdict.name)
+      form.set('metadata', JSON.stringify(metadata))
+      if (args.context) form.set('supportingContext', String(args.context).slice(0, 1500))
+      const data = await apiMultipart(ctx, settings, `/ns/${encodeURIComponent(container)}/document/file`, form, exec.signal)
+      const documentId = String((data && data.id) || '')
+      const ingest = documentId ? await waitForIngest(ctx, settings, container, documentId, exec.signal) : { status: 'unknown' }
+      const text = `Uploaded ${verdict.name} (${verdict.size} bytes) to \`${container}\` as ${documentId} — ${ingestText(ingest.status)} (status: ${ingest.status}).`
+      return { container, documentId, status: ingest.status, text }
+    },
+  })
+
+  ctx.tools.register({
+    name: 'supermemory_namespace',
+    description: 'Inspect or manage a Supermemory namespace: list namespaces with counts, set its supporting context, or delete it. The server cannot create namespaces; deleting one is irreversible and refuses your own namespace and any Hermes namespace.',
+    parameters: {
+      action: { type: 'string', required: true, enum: ['list', 'context', 'delete'], description: 'What to do.' },
+      namespace: { type: 'string', description: 'Target namespace for context and delete.' },
+      context: { type: 'string', description: 'Supporting context for action=context (max 1500 chars, empty string clears it).' },
+      moveTo: { type: 'string', description: 'For delete: move the documents to this namespace instead of dropping them.' },
+      confirm: { type: 'string', description: 'For delete: the literal word delete.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args, exec) {
+      const action = String(args.action || '')
+      if (action === 'list') {
+        const data = await api(ctx, settings, '/ns?limit=100', { timeoutMs: 6000, signal: exec.signal })
+        const namespaces = data && Array.isArray(data.namespaces) ? data.namespaces : []
+        const lines = [`${namespaces.length} namespace(s) on ${settings.baseUrl}`]
+        for (const entry of namespaces) {
+          const name = entry.namespace
+          const label = name === settings.container ? 'you' : isHermesContainer(name) ? 'Hermes' : 'other'
+          const context = entry.supportingContext ? ` · context: ${String(entry.supportingContext).slice(0, 60)}` : ''
+          lines.push(`- \`${name}\` · ${label} · ${entry.documentCount ?? 0} docs · ${entry.memoryCount ?? 0} memories${context}`)
+        }
+        return { text: lines.join('\n') }
+      }
+
+      const namespace = sanitizeContainer(String(args.namespace || ''))
+      if (!namespace) throw new Error('namespace is required')
+      if (action === 'context') {
+        const value = args.context === undefined || args.context === null ? null : String(args.context).slice(0, 1500)
+        const data = await api(ctx, settings, `/ns/${encodeURIComponent(namespace)}`, {
+          method: 'PATCH',
+          body: { supportingContext: value === null || value === '' ? null : value },
+          signal: exec.signal,
+        })
+        const applied = data && data.supportingContext ? String(data.supportingContext) : '(cleared)'
+        return { text: `Supporting context for \`${namespace}\`: ${applied}` }
+      }
+      if (action === 'delete') {
+        if (namespace === settings.container) throw new Error(`refusing to delete your own namespace \`${namespace}\``)
+        if (isHermesContainer(namespace)) throw new Error(`refusing to delete Hermes namespace \`${namespace}\`: another agent's memory is not yours to remove`)
+        if (String(args.confirm || '').toLowerCase() !== 'delete') {
+          throw new Error(`refusing to delete \`${namespace}\` without confirm: "delete" (this is irreversible)`)
+        }
+        const query = args.moveTo ? `?moveTo=${encodeURIComponent(sanitizeContainer(String(args.moveTo)))}` : ''
+        const data = await api(ctx, settings, `/ns/${encodeURIComponent(namespace)}${query}`, {
+          method: 'DELETE',
+          signal: exec.signal,
+        })
+        const moved = args.moveTo ? `, documents moved to \`${sanitizeContainer(String(args.moveTo))}\`` : ''
+        const count = data && typeof data.deletedDocumentsCount === 'number' ? ` (${data.deletedDocumentsCount} documents)` : ''
+        return { text: `Deleted namespace \`${namespace}\`${count}${moved}.` }
+      }
+      throw new Error(`unknown action: ${action}`)
+    },
+  })
+
+  ctx.tools.register({
+    name: 'supermemory_buckets',
+    description: 'List, set, or delete profile buckets: named groups that guide how Supermemory classifies facts in a namespace (for example "projects", "preferences").',
+    parameters: {
+      action: { type: 'string', required: true, enum: ['list', 'set', 'delete'], description: 'What to do.' },
+      buckets: { type: 'string', description: 'For set: JSON object {slug: description}; slug matches ^[a-z0-9][a-z0-9_-]*$, description up to 2000 chars.' },
+      names: { type: 'string', description: 'For delete: comma-separated bucket names.' },
+      container: { type: 'string', description: 'Namespace. Defaults to your own.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args, exec) {
+      const action = String(args.action || '')
+      const own = args.container === undefined
+      const container = own ? settings.container : await resolveReadContainer(args.container)
+      const path = `/ns/${encodeURIComponent(container)}/profile/buckets`
+
+      if (action === 'delete') {
+        if (!own) throw new Error('buckets can only be changed in your own namespace')
+        const names = String(args.names || '').split(',').map(item => item.trim()).filter(Boolean)
+        if (names.length === 0) throw new Error('names is required for delete')
+        const data = await api(ctx, settings, path, { method: 'DELETE', body: { buckets: names }, signal: exec.signal })
+        return { text: renderBuckets(container, data) }
+      }
+      if (action === 'set') {
+        if (!own) throw new Error('buckets can only be changed in your own namespace')
+        let parsed = args.buckets
+        if (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed)
+          } catch (error) {
+            throw new Error(`buckets must be a JSON object of {slug: description}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('buckets must be an object of {slug: description}')
+        const buckets = {}
+        for (const [slug, description] of Object.entries(parsed)) {
+          if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug) || slug.length > 64) throw new Error(`invalid bucket name: ${slug}`)
+          if (typeof description !== 'string' || description.length === 0 || description.length > 2000) {
+            throw new Error(`bucket ${slug} needs a description of 1..2000 characters`)
+          }
+          buckets[slug] = description
+        }
+        const data = await api(ctx, settings, path, { method: 'PUT', body: { buckets }, signal: exec.signal })
+        return { text: renderBuckets(container, data) }
+      }
+      if (action === 'list') {
+        const data = await api(ctx, settings, path, { signal: exec.signal })
+        return { text: renderBuckets(container, data) }
+      }
+      throw new Error(`unknown action: ${action}`)
     },
   })
 }

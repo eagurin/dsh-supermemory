@@ -148,6 +148,9 @@ for (const tool of [
   'supermemory_read_document',
   'supermemory_list',
   'supermemory_namespaces',
+  'supermemory_upload_file',
+  'supermemory_namespace',
+  'supermemory_buckets',
 ]) {
   assert(readme.includes(tool), `README does not mention the ${tool} tool`)
 }

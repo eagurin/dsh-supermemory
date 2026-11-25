@@ -4,6 +4,37 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-11-25
+
+The remaining server capabilities: long sessions no longer lose their beginning,
+files can enter memory, and namespaces and profile buckets are manageable.
+
+### Added
+
+- **Chunked capture.** A session that does not fit `maxCaptureChars` is split on
+  turn boundaries into `dsh-<sessionId>-p1…pN` (`captureTurnsPerChunk`, 25 turns
+  by default). Previously the transcript was tail-clamped, so the beginning of a
+  long session was silently dropped. Crossing the limit deletes the earlier single
+  document and shrinking back deletes the leftover parts, so facts are neither
+  duplicated nor orphaned.
+- **`supermemory_upload_file`** — PDF, images, text and office documents through
+  `/document/file`, with the processing status. Off by default (`allowFileUpload:
+  false`) and confined to `uploadRoots`: the path is canonicalized with
+  `realpathSync` and anything outside the listed directories is refused, so an
+  injected instruction cannot exfiltrate `~/.ssh/id_rsa` through the memory server.
+- **`supermemory_namespace`** — list namespaces, set or clear `supportingContext`,
+  delete a namespace (optionally with `moveTo`). Deletion needs `confirm: delete`
+  and refuses the agent's own namespace and any Hermes namespace. The server has
+  no `POST /ns`: namespaces cannot be created through this API.
+- **`supermemory_buckets`** — list, set and delete profile buckets, so facts can be
+  classified into named groups instead of one flat profile.
+
+### Verified
+
+Every new endpoint was exercised against the live local server before the
+release: bucket set/list/delete, a real file upload (`status: queued` → `done`),
+and document deletion (`count: 1`). 51 unit tests pass.
+
 ## [0.3.0] — 2026-11-25
 
 Server choice at install time, plus the hardening pass from the public-repository

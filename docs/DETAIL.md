@@ -86,6 +86,20 @@ v5 напрямую (как официальный Hermes-плагин), поэ�
 проходит `queued` → `processing` → `done`. `supermemory_save` ждёт результат в
 пределах `ingestWaitMs` и сообщает фактический статус, а не обещание.
 
+## Длинные сессии, файлы, namespace и buckets
+
+Сессия, которая влезает в `maxCaptureChars`, остаётся одним документом `dsh-<sessionId>`; которая не влезает —
+режется по границам ходов на `dsh-<sessionId>-p1…pN` (по `captureTurnsPerChunk` ходов), и при переходе через
+лимит одиночный документ удаляется, чтобы факты не дублировались. Обратный переход (компакция уменьшила сессию)
+удаляет лишние части.
+
+`supermemory_upload_file` использует `/document/file` и читает локальный диск, поэтому выключен по умолчанию и
+ограничен `uploadRoots`: путь канонизируется, файл вне разрешённых каталогов отвергается.
+
+`supermemory_namespace` умеет список, `supportingContext` и удаление (`confirm: delete`, отказ для своего и
+гермесовых namespace). Сервер не умеет создавать namespace — `POST /ns` в API отсутствует. `supermemory_buckets`
+управляет профильными buckets (`/profile/buckets`).
+
 ## Проверка после установки
 
 Инструменты появляются в сессии как `supermemory_search`, `supermemory_profile`, `supermemory_save`,
