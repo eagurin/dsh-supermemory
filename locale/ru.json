@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Supermemory",
+    "description": "Долговременная память DeepSeek Harness на Supermemory: собственный namespace плюс чтение памяти других агентов, например Гермеса.",
+    "detail": "docs/DETAIL.md"
+  }
+}

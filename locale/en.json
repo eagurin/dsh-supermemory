@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Supermemory",
+    "description": "Long-term memory for DeepSeek Harness: your own Supermemory namespace plus read-only recall from other agents, such as Hermes.",
+    "detail": "docs/DETAIL.md"
+  }
+}

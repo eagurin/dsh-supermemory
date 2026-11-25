@@ -1,0 +1,55 @@
+{
+  "name": "@local/dsh-supermemory",
+  "version": "0.1.0",
+  "description": "Supermemory long-term memory for DeepSeek Harness: profile-scoped own memory plus read access to other agents' Supermemory containers",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "eagurin",
+  "homepage": "https://github.com/eagurin/dsh-supermemory#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eagurin/dsh-supermemory.git"
+  },
+  "bugs": {
+    "url": "https://github.com/eagurin/dsh-supermemory/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "supermemory",
+    "memory",
+    "long-term-memory",
+    "recall",
+    "agent-memory"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "docs"
+  ],
+  "scripts": {
+    "check": "node --check index.js && node scripts/check.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

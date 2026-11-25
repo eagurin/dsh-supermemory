@@ -1,0 +1,26 @@
+# Supermemory for DeepSeek Harness.
+#
+# `baseUrl` points at the Supermemory server that already holds the Hermes
+# memory. The official Hermes plugin is configured for `npx supermemory local`
+# on 127.0.0.1:6767, so the same server and the same API key serve both agents.
+#
+# `container` is this agent's own namespace: DeepSeek Harness writes only here.
+# `readContainers` and `readPrefixes` make other agents' memory readable. Hermes
+# is a different agent, so its containers stay read-only and every recalled fact
+# is labeled with the container it came from.
+- insert:
+    - id: supermemory
+      name: '@local/dsh-supermemory'
+      config:
+        baseUrl: http://localhost:6767
+        container: dsh
+        readContainers:
+          - hermes_default
+        readPrefixes:
+          - hermes
+        autoRecall: true
+        autoCapture: true
+        searchMode: hybrid
+        maxRecallResults: 6
+        profileFrequency: 20
+        dreaming: instant
