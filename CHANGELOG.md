@@ -4,6 +4,24 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] — 2026-11-25
+
+Documentation-only release: the install instructions named a command that does not
+exist on a Desktop install.
+
+### Fixed
+
+- **The README's primary install path was wrong for DSH Desktop.** A Desktop
+  installation ships only the application, so `dsh plugin …` is not on `PATH`; the
+  documented command failed before any plugin work started. The three paths that
+  actually exist are now documented in order: ask the agent
+  (`plugin_manager install_bundle` with the git spec), the GUI (*Settings → Plugins →
+  Install from URL*), and the npm CLI (`npx @deepseek-ai/dsh plugin …`) only for
+  people who have it. The same correction is in the Russian mirror, in
+  `scripts/setup.mjs` next steps, and in `AGENTS.md`.
+- The row-by-hand section now states that `- id: supermemory` is an override and
+  needs `insert` on a fresh profile, with the exact error DSH returns.
+
 ## [0.5.1] — 2026-11-25
 
 Follow-up review of the v0.5.0 patch itself. One release blocker and several real

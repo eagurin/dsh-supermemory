@@ -47,30 +47,40 @@ node scripts/setup.mjs --json          # машинный план (код 3 и 
 
 ## Установка
 
-Штатный путь — сам DSH: он ставит бандл и применяет его собственный `cordis.patch.yml`, отдельная
-строка в профиле не нужна.
+В **DSH Desktop** команды `dsh` в оболочке нет — плагин ставится через сам DSH. Выберите один путь:
 
-```bash
-dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"
-```
+1. **Попросить агента** (работает сразу): сказать ему установить бандл
 
-То же в GUI: **Settings → Plugins → Install from URL**. После установки строка появляется в профиле
-сама, с настройками под локальный сервер.
+   ```
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2
+   ```
+
+2. **GUI**: *Settings → Plugins → Install from URL* с
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2`.
+
+3. **CLI**, если вы используете `@deepseek-ai/dsh` из npm:
+
+   ```bash
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2"
+   ```
+
+Бандл сам вставляет свой `cordis.patch.yml`, вручную строку писать не нужно. Обычный
+`pnpm add` внутри профиля ставит пакет, но **не** добавляет его в `dsh.profile.bundles`, поэтому плагин
+останется неактивным — используйте один из трёх путей выше.
 
 <details>
-<summary>Установка через pnpm или вставка строки вручную (продвинутое)</summary>
+<summary>Вставка строки вручную (продвинутое)</summary>
 
-`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"` внутри каталога профиля ставит
-пакет, но **не** добавляет его в `dsh.profile.bundles`, поэтому плагин останется неактивным. Если
-ставите так — выберите бандл в GUI либо добавьте строку сами; при этом `- id: supermemory` — это
-**оверрайд** (заменяет существующую запись), а на чистом профиле нужен `insert`:
+`- id: supermemory` — это **оверрайд**: он заменяет конфиг существующей записи, а на чистом профиле DSH
+ответит `patch: entry "supermemory" not found`. Чтобы добавить плагин без выбора бандла, оберните строку в
+`insert`:
 
 ```yaml
 - insert:
     - id: supermemory
       name: '@local/dsh-supermemory'
       config:
-        baseUrl: http://127.0.0.1:6767
+        baseUrl: http://127.0.0.1:8787
 ```
 </details>
 

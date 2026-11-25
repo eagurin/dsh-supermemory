@@ -48,32 +48,42 @@ It never silently picks the cloud: with no local server it asks (or, in `--json`
 
 ## Install
 
-The canonical path is DSH itself — it installs the bundle and applies the bundle's own
-`cordis.patch.yml`, so no profile row is needed:
+A DSH **Desktop** installation has no `dsh` shell command; the plugin is installed
+through DSH itself. Pick one:
 
-```bash
-dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"
-```
+1. **Ask the agent** (works out of the box): tell it to install the bundle
 
-The same operation is available in the GUI: **Settings → Plugins → Install from URL**. After the
-install, the row appears in the profile automatically with local-server defaults.
+   ```
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2
+   ```
+
+2. **GUI**: *Settings → Plugins → Install from URL* with
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2`.
+
+3. **CLI**, only if you use `@deepseek-ai/dsh` from npm:
+
+   ```bash
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2"
+   ```
+
+The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
+hand. A plain `pnpm add` inside the profile installs the package but does **not**
+select it in `dsh.profile.bundles`, so the plugin stays inactive — use one of the
+three paths above.
 
 <details>
-<summary>Installing with pnpm or copying the row by hand (advanced)</summary>
+<summary>Writing the row by hand (advanced)</summary>
 
-`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"` inside the profile directory
-installs the package but does **not** add it to `dsh.profile.bundles`, so the plugin stays inactive.
-If you install that way, either select the bundle in the GUI, or add the row yourself — and note that
-`- id: supermemory` alone is an **override** (it replaces an existing entry), while a fresh profile
-needs `insert`:
+`- id: supermemory` is an **override**: it replaces the config of an existing entry
+and is rejected on a fresh profile (`patch: entry "supermemory" not found`). To add
+the plugin without selecting the bundle, wrap the row in `insert`:
 
 ```yaml
 - insert:
     - id: supermemory
       name: '@local/dsh-supermemory'
       config:
-        # every key is optional; omitted keys keep their defaults
-        baseUrl: http://127.0.0.1:6767
+        baseUrl: http://127.0.0.1:8787
 ```
 </details>
 
