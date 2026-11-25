@@ -70,7 +70,7 @@ test('messageText joins text blocks and ignores other content', () => {
   assert.equal(messageText(null), '')
 })
 
-test('lastUserMessage only accepts messages the human wrote', () => {
+test('lastUserMessage accepts human and scheduled turns but not the recall block', () => {
   const messages = [
     userMessage('first'),
     assistantMessage('answer'),
@@ -79,4 +79,8 @@ test('lastUserMessage only accepts messages the human wrote', () => {
   ]
   assert.deepEqual(lastUserMessage(messages), { text: 'second', index: 3 })
   assert.deepEqual(lastUserMessage([assistantMessage('only answer')]), { text: '', index: -1 })
+  const scheduled = { role: 'user', content: [{ type: 'text', text: 'scheduled job body' }], source: { kind: 'schedule' } }
+  assert.deepEqual(lastUserMessage([scheduled]), { text: 'scheduled job body', index: 0 })
+  const recall = { role: 'user', content: [{ type: 'text', text: 'recalled background' }], source: { kind: 'supermemory', form: 'recall' } }
+  assert.deepEqual(lastUserMessage([recall]), { text: '', index: -1 })
 })

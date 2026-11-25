@@ -4,6 +4,24 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] — 2026-11-25
+
+### Fixed
+
+- **Recall now serves turns opened by the scheduler or another agent.** The query was
+  taken only from a message whose source kind was `user`, so a session started by a
+  scheduled task (source kind `schedule`) got capture but no recall. Any turn source
+  counts now (`user`, `schedule`, `team-message`, `parent`); the plugin's own injected
+  block still never counts as a request.
+
+### Verified live
+
+- A real root session created by a scheduled task was captured end to end: the document
+  `dsh-session-a71725ad-…` appeared with `turns: 1`, `type: conversation`,
+  `status: done`, and the scheduled message is part of its content.
+- The compaction family path was observed on a real session
+  (`dsh-session-6df2638e-…-c74a9e650`), which is what protects pre-compaction turns.
+
 ## [0.5.3] — 2026-11-25
 
 Fixes a real-world failure: on a brand-new session the agent received only the recall

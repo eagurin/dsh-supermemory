@@ -846,7 +846,10 @@ function lastUserMessage(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (!message || message.role !== 'user') continue
-    if (!message.source || message.source.kind !== 'user') continue
+    // A turn can be opened by the scheduler or by another agent, not only by a
+    // human; those are the turn's request too, and recall should serve them.
+    // The plugin's own injected block is not a request.
+    if (!TURN_SOURCES.has(sourceKind(message))) continue
     const text = messageText(message)
     if (text) return { text, index }
   }
