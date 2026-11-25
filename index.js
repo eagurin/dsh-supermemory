@@ -251,6 +251,9 @@ function resolveSettings(raw) {
   }
   settings.allowWritesToReadContainers = bool(input.allowWritesToReadContainers, false)
   settings.autoRecall = bool(input.autoRecall, true)
+  if (isHermesContainer(settings.container)) {
+    throw new Error(`container must not be a Hermes namespace: ${settings.container}`)
+  }
   settings.autoCapture = bool(input.autoCapture, true)
   settings.recallSubagents = bool(input.recallSubagents, false)
   settings.captureSubagents = bool(input.captureSubagents, false)
@@ -465,9 +468,9 @@ function mergeFacts(groups, max) {
         container: group.container,
         text,
         similarity: typeof item.similarity === 'number' ? item.similarity : 0,
-        // v5 search results carry a memory id, not a document id; documents are
-        // only included when `include.documents` is requested.
-        documentId: item.documentId || undefined,
+        // v5 search results carry a memory id; documents only appear when
+        // `include.documents` is requested, which this plugin never does.
+        memoryId: item.id || undefined,
       })
     }
   }
@@ -614,8 +617,11 @@ async function buildRecall(ctx, settings, query, options = {}) {
     }
     lines.push('')
   }
-  lines.push(close)
-  return clampLines(lines, settings.recallMaxChars, 'head')
+  // Clamp the body only: the closing marker must survive truncation, otherwise the
+  // "untrusted region" never ends and the human message rides inside it.
+  const budget = Math.max(120, settings.recallMaxChars - close.length - 1)
+  const body = clampLines(lines, budget, 'head')
+  return `${body}\n${close}`
 }
 
 /**
@@ -626,7 +632,7 @@ async function buildRecall(ctx, settings, query, options = {}) {
  * @param {AbortSignal} [signal] - cancellation.
  * @returns {Promise<string>} markdown bullets, or an empty string.
  */
-async function fetchProfileText(ctx, settings, container, signal) {
+async function fetchProfileText(ctx, settings, container, signal, failures) {
   try {
     const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/profile`, {
       method: 'POST',
@@ -638,7 +644,7 @@ async function fetchProfileText(ctx, settings, container, signal) {
     if (facts.length === 0) return ''
     return clampLines(facts.slice(0, 40).map(fact => `- ${sanitizeUntrusted(fact, { singleLine: true })}`), settings.profileMaxChars, 'head')
   } catch (error) {
-    if (Array.isArray(options?.failures)) options.failures.push(`${container}: ${error instanceof Error ? error.message : String(error)}`)
+    if (Array.isArray(failures)) failures.push(`${container}: ${error instanceof Error ? error.message : String(error)}`)
     return ''
   }
 }
@@ -896,7 +902,12 @@ function buildTranscriptSegments(session) {
     if (!message) continue
     if (isCheckpointMessage(message)) {
       const text = messageText(message)
-      if (message.id) checkpointIds.push(String(message.id))
+      // `id` is the canonical identity; `source.compactionId` and the text are
+      // fallbacks so a checkpoint is never mistaken for an ordinary sequence.
+      const identity = message.id
+        || (message.source && message.source.compactionId)
+        || text
+      if (identity) checkpointIds.push(String(identity))
       if (!text) continue
       // A checkpoint summarizes everything before it; keep it as a labelled part of
       // the transcript instead of silently dropping the only remaining trace.
@@ -960,15 +971,23 @@ function redactSecrets(text, enabled) {
   return output
 }
 
-/** Short stable family tag for one capture generation. */
-function familyTag(sessionId, checkpointIds) {
-  if (checkpointIds.length === 0) return 'g0'
-  return `c${createHash('sha256').update(checkpointIds.at(-1)).digest('hex').slice(0, 8)}`
+/**
+ * Short stable family tag for one capture generation.
+ *
+ * A checkpoint with no usable id still has to open a new family: mapping it onto
+ * `g0` would rewrite the original document and retire the parts that hold the
+ * pre-compaction turns, which is the exact loss this scheme prevents.
+ */
+function familyTag(checkpointKeys) {
+  if (checkpointKeys.length === 0) return 'g0'
+  return `c${createHash('sha256').update(checkpointKeys.at(-1)).digest('hex').slice(0, 8)}`
 }
 
 /** Header shared by every captured document. */
 function transcriptHeader(session, turns, part) {
   const header = session.header && typeof session.header === 'object' ? session.header : {}
+  // The part index belongs to metadata: putting the total part count in the header
+  // would change every part's hash whenever the session grows past a boundary.
   const title = part === undefined
     ? `# DeepSeek Harness conversation ${session.id}`
     : `# DeepSeek Harness conversation ${session.id} (part ${part})`
@@ -987,7 +1006,7 @@ function transcriptHeader(session, turns, part) {
 
 /** Render one capture unit, clamped and aligned to a role marker. */
 function renderChunk(session, settings, lines, turns, part, parts) {
-  const header = transcriptHeader(session, turns, part === undefined ? undefined : `${part} of ${parts}`)
+  const header = transcriptHeader(session, turns, part === undefined ? undefined : String(part))
   let body = clampLines(lines.flat(), settings.maxCaptureChars, 'tail')
   body = redactSecrets(body, settings.redactSecrets !== false)
   // Any leading role label keeps the slice readable; a fixed list missed
@@ -1014,7 +1033,7 @@ function renderChunk(session, settings, lines, turns, part, parts) {
 function buildTranscriptChunks(session, settings) {
   const sessionId = String(session.id).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
   const { segments, turns, checkpointIds } = buildTranscriptSegments(session)
-  const family = familyTag(sessionId, checkpointIds)
+  const family = familyTag(checkpointIds)
   const baseId = family === 'g0' ? `dsh-${sessionId}` : `dsh-${sessionId}-${family}`
   const empty = { documents: [], chunked: false, turns, family, obsolete: [] }
   if (segments.length === 0) return empty
@@ -1270,6 +1289,7 @@ async function deleteDocuments(ctx, settings, container, ids) {
   const unique = [...new Set(ids.filter(id => typeof id === 'string' && id.length > 0))]
   if (unique.length === 0) return 0
   let removed = 0
+  const failed = []
   // The endpoint accepts at most 100 ids per call.
   for (let index = 0; index < unique.length; index += 100) {
     const batch = unique.slice(index, index + 100)
@@ -1280,12 +1300,18 @@ async function deleteDocuments(ctx, settings, container, ids) {
         timeoutMs: settings.timeoutMs,
       })
       removed += typeof data?.count === 'number' ? data.count : batch.length
+      // The server refuses documents that are still processing; those ids must be
+      // retried on the next flush instead of being forgotten.
+      const errors = Array.isArray(data && data.errors) ? data.errors : []
+      for (const entry of errors) {
+        if (entry && typeof entry.id === 'string') failed.push({ id: entry.id, reason: String(entry.error || 'delete refused') })
+      }
     } catch (error) {
       // A 404 means the documents are already gone: not an error worth a retry.
       if (error.status !== 404) throw error
     }
   }
-  return removed
+  return { removed, failed }
 }
 
 /**
@@ -1303,7 +1329,20 @@ async function deleteDocuments(ctx, settings, container, ids) {
  */
 function defineTool(definition) {
   const parameters = definition.parameters
-  if (!parameters || parameters.type === 'object') return definition
+  const execute = definition.execute
+  const wrap = required => ({
+    ...definition,
+    async execute(args, exec) {
+      const missing = required.filter(key => args[key] === undefined || args[key] === null || args[key] === '')
+      if (missing.length > 0) throw new Error(`${definition.name}: missing required argument(s): ${missing.join(', ')}`)
+      return execute(args, exec)
+    },
+  })
+  // A definition that already carries a JSON Schema is passed through, but its
+  // declared required list is still enforced here.
+  if (!parameters || parameters.type === 'object') {
+    return Array.isArray(parameters?.required) && parameters.required.length > 0 ? wrap(parameters.required) : definition
+  }
   const properties = {}
   const required = []
   for (const [name, property] of Object.entries(parameters)) {
@@ -1311,7 +1350,6 @@ function defineTool(definition) {
     properties[name] = rest
     if (isRequired) required.push(name)
   }
-  const execute = definition.execute
   return {
     ...definition,
     parameters: {
@@ -1360,6 +1398,7 @@ export const internals = {
   defineTool,
   sanitizeUntrusted,
   redactSecrets,
+  readVerifiedFile,
 }
 
 export function apply(ctx, raw) {
@@ -1417,10 +1456,11 @@ export function apply(ctx, raw) {
       if (previous && previous.turn === payload.turn) return decision
 
       const readable = (await readableContainers().catch(() => [])).slice(0, 3)
+      const recallFailures = []
       const profileTexts = new Map()
       if (settings.profileFrequency > 0 && (payload.turn === 1 || payload.turn % settings.profileFrequency === 0)) {
         const containers = [settings.container, ...readable.slice(0, 3)]
-        const profiles = await Promise.all(containers.map(async container => [container, await fetchProfileText(ctx, settings, container, payload.signal)]))
+        const profiles = await Promise.all(containers.map(async container => [container, await fetchProfileText(ctx, settings, container, payload.signal, recallFailures)]))
         for (const [container, text] of profiles) {
           if (text) profileTexts.set(container, `Known profile facts:\n${text}`)
         }
@@ -1437,7 +1477,6 @@ export function apply(ctx, raw) {
       }
 
       let block = ''
-      const recallFailures = []
       try {
         block = await buildRecall(ctx, settings, query, {
           readable,
@@ -1463,19 +1502,17 @@ export function apply(ctx, raw) {
         if (oldest !== undefined) recalledTurns.delete(oldest)
       }
       const message = contextMessage(block)
-      // Earlier recall blocks are background that already served its turn;
-      // keeping them grows the durable transcript by up to `recallMaxChars` per
-      // turn for no benefit, so only the newest block survives.
-      const kept = decision.messages.filter(entry => !(entry && entry.source && entry.source.kind === 'supermemory'))
-      const anchor = index >= 0 ? decision.messages[index] : undefined
-      const anchorIndex = anchor === undefined ? -1 : kept.indexOf(anchor)
-      const insertAt = anchorIndex >= 0 ? anchorIndex : kept.length
+      // A previous turn's block is already durable in the session log and cannot be
+      // removed from this hook; do not pretend otherwise by filtering the claimed
+      // batch (that batch never contains it). `recallMaxChars` and
+      // `maxRecallResults` are the levers that bound the transcript growth.
+      const insertAt = index >= 0 ? index : decision.messages.length
       return {
         ...decision,
         messages: [
-          ...kept.slice(0, insertAt),
+          ...decision.messages.slice(0, insertAt),
           message,
-          ...kept.slice(insertAt),
+          ...decision.messages.slice(insertAt),
         ],
       }
     }, { prepend: true })
@@ -1496,7 +1533,9 @@ export function apply(ctx, raw) {
         } finally {
           state.running = undefined
         }
-      })()
+      })().catch(error => {
+        log('warn', `capture loop failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }
 
     const flush = async (sessionId, session, state) => {
@@ -1533,19 +1572,30 @@ export function apply(ctx, raw) {
         // Retire only documents of the same family that this plan no longer owns:
         // another family's documents hold turns the current surface cannot see.
         const live = new Set(plan.documents.map(document => document.documentId))
-        const stale = [...state.hashes.entries()]
+        // A surface can shrink for reasons other than compaction (rewind, rewrite).
+        // Deleting then would drop turns that still exist nowhere else, so a shrink
+        // never retires anything; the recorded count grows monotonically.
+        const shrank = typeof state.lastTurns === 'number' && plan.turns < state.lastTurns
+        state.lastTurns = Math.max(plan.turns, typeof state.lastTurns === 'number' ? state.lastTurns : 0)
+        const stale = shrank ? [] : [...state.hashes.entries()]
           .filter(([id, entry]) => id.startsWith(`dsh-${String(sessionId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)}`)
             && entry.family === plan.family
             && !live.has(id))
           .map(([id]) => id)
           .concat(plan.obsolete.filter(id => !live.has(id)))
         if (stale.length > 0) {
-          const removed = await deleteDocuments(ctx, settings, settings.container, stale)
-          for (const id of stale) state.hashes.delete(id)
-          log('debug', `capture retired ${removed} old document(s) for ${sessionId}`)
+          const { removed, failed } = await deleteDocuments(ctx, settings, settings.container, stale)
+          const failedIds = new Set(failed.map(entry => entry.id))
+          for (const id of stale) {
+            if (!failedIds.has(id)) state.hashes.delete(id)
+          }
+          if (failed.length > 0) {
+            log('warn', `capture could not retire ${failed.length} document(s) for ${sessionId} (${failed[0].reason}); will retry`)
+          } else {
+            log('debug', `capture retired ${removed} old document(s) for ${sessionId}`)
+          }
         }
         state.attempts = 0
-        state.session = undefined
         if (written > 0 || stale.length > 0) {
           log('debug', `captured ${sessionId}: ${plan.documents.length} document(s), ${written} written, ${stale.length} retired`)
         }
@@ -1567,9 +1617,8 @@ export function apply(ctx, raw) {
       const sessionId = String(session.id)
       const existing = captureState.get(sessionId)
       if (existing && existing.timer) clearTimeout(existing.timer)
-      const state = existing || { timer: null, hashes: new Map(), attempts: 0, session: undefined, wanted: false, running: undefined }
+      const state = existing || { timer: null, hashes: new Map(), attempts: 0, wanted: false, running: undefined, lastTurns: 0 }
       state.attempts = 0
-      state.session = session
       state.timer = setTimeout(() => scheduleFlush(sessionId, session, state), settings.captureDebounceMs)
       captureState.set(sessionId, state)
       if (captureState.size > 200) {
@@ -1585,7 +1634,6 @@ export function apply(ctx, raw) {
       const state = captureState.get(sessionId)
       if (!state) return
       if (state.timer) clearTimeout(state.timer)
-      state.session = undefined
       state.wanted = false
       captureState.delete(sessionId)
     })
@@ -1683,7 +1731,7 @@ export function apply(ctx, raw) {
       for (const fact of facts) {
         const percent = Math.round(fact.similarity * 100)
         const source = containerLabel(fact.container, settings.container)
-        lines.push(`- ${percent}% · ${source}${fact.documentId ? ` · document ${fact.documentId}` : ''}`)
+        lines.push(`- ${percent}% · ${source}${fact.memoryId ? ` · memory ${fact.memoryId}` : ''}`)
         lines.push(`  ${fact.text}`)
       }
       const text = clampLines(lines, 12000, 'head')
@@ -1793,7 +1841,7 @@ export function apply(ctx, raw) {
 
   registerTool({
     name: 'supermemory_forget',
-    description: 'Forget Supermemory memories either by exact memory id (from search or list) or by a natural-language description of what should be forgotten. Use dryRun to preview.',
+    description: 'Forget Supermemory memories either by exact memory id (from search or list) or by a natural-language description of what should be forgotten. It previews first and deletes only with confirm: "delete"; the server excludes forgotten memories from search but keeps the document.',
     parameters: {
       memoryId: { type: 'string', description: 'Exact memory id to delete.' },
       query: { type: 'string', description: 'Description of the memories to forget, for semantic deletion.' },

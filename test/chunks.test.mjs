@@ -52,7 +52,7 @@ test('every chunk stays near the capture budget', () => {
   assert.ok(plan.documents.length > 1)
   for (const document of plan.documents) {
     assert.ok(document.content.length <= 2000 + 400, `chunk ${document.documentId} is ${document.content.length} chars`)
-    assert.match(document.content, /part \d+ of \d+/)
+    assert.match(document.content, /\(part \d+\)/)
   }
 })
 

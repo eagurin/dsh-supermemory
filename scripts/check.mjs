@@ -210,6 +210,10 @@ for (const file of ['README.md', 'README.ru.md']) {
   assert(!/seven tools|семь инструментов/i.test(readText(file)), `${file} still claims seven tools`)
 }
 
+const setupText = readText('scripts/setup.mjs')
+assert(setupText.includes('PACKAGE_VERSION'), 'scripts/setup.mjs must read the install tag from package.json instead of hardcoding it')
+assert(!/dsh-supermemory\.git#v\d+\.\d+\.\d+/.test(setupText), 'scripts/setup.mjs hardcodes a release tag')
+
 // --------------------------------------------------------------- secrets ----
 const SECRET_PATTERNS = [
   /oc_sk_[A-Za-z0-9]/,

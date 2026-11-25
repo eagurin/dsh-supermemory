@@ -148,3 +148,117 @@ test('two overlapping captures do not delete each other\'s parts', async () => {
     host.restore()
   }
 })
+
+test('a checkpoint without an id still opens a new family', () => {
+  const messages = [
+    checkpoint('summary without an id', undefined),
+    turn('continue'),
+    answer('ok'),
+  ]
+  const plan = buildTranscriptChunks(session('session-noid', messages), resolveSettings({ minCaptureChars: 5 }))
+  assert.notEqual(plan.family, 'g0', 'a checkpoint without an id fell back to the original family')
+  assert.deepEqual(plan.obsolete, [])
+})
+
+test('a failed profile fetch degrades instead of breaking the first turn', async () => {
+  const host = await createHost({
+    config: { profileFrequency: 1, readContainers: [] },
+    fetchHandler: url => {
+      if (url.includes('/profile')) return { status: 500, body: { error: 'boom' } }
+      if (url.includes('/search')) return { body: { results: [{ memory: 'a fact that is long enough', similarity: 0.8 }] } }
+      return { body: {} }
+    },
+  })
+  try {
+    const preStep = hook(host, 'agent/pre-step')
+    const decision = { kind: 'enter', messages: [turn('hello there')] }
+    const result = await preStep.handler(
+      { agent: { id: 'sess-profile', session: { header: {} } }, messages: decision.messages, turn: 1, step: 1, signal: new AbortController().signal },
+      async () => decision,
+    )
+    assert.equal(result.kind, 'enter')
+  } finally {
+    host.restore()
+  }
+})
+
+test('the closing marker survives truncation of the recall block', async () => {
+  const host = await createHost({
+    config: { recallMaxChars: 600, maxRecallResults: 6 },
+    fetchHandler: url => (url.includes('/search')
+      ? { body: { results: [{ memory: 'о'.repeat(3000), similarity: 0.9 }] } }
+      : { body: {} }),
+  })
+  try {
+    const preStep = hook(host, 'agent/pre-step')
+    const decision = { kind: 'enter', messages: [turn('что известно')] }
+    const result = await preStep.handler(
+      { agent: { id: 'sess-long', session: { header: {} } }, messages: decision.messages, turn: 1, step: 1, signal: new AbortController().signal },
+      async () => decision,
+    )
+    const text = result.messages.find(message => message.source && message.source.kind === 'supermemory').content[0].text
+    const open = text.match(/<<<supermemory-([0-9a-f-]{36})>>>/)
+    assert.ok(open, 'no opener')
+    assert.ok(text.includes(`<<<end-supermemory-${open[1]}>>>`), 'the closer was clamped away')
+    assert.ok(text.length <= 600 + 60, `block ignored the budget: ${text.length}`)
+  } finally {
+    host.restore()
+  }
+})
+
+test('a document the server refuses to delete is retried, not forgotten', async () => {
+  const deletes = []
+  const host = await createHost({
+    config: { captureDebounceMs: 5, container: 'dsh', maxCaptureChars: 1200, captureTurnsPerChunk: 2, minCaptureChars: 5 },
+    fetchHandler: (url, init) => {
+      const method = init.method || 'GET'
+      if (method === 'PATCH') return { status: 404, body: { error: 'Document not found' } }
+      if (method === 'POST') return { body: { id: 'x', status: 'queued' } }
+      if (method === 'DELETE') {
+        deletes.push(JSON.parse(String(init.body)).ids)
+        return { body: { count: 0, errors: [{ id: 'dsh-session-retry', error: 'Document is still processing' }] } }
+      }
+      return { body: {} }
+    },
+  })
+  try {
+    const capture = hook(host, 'session/event')
+    const messages = []
+    for (let index = 0; index < 12; index += 1) messages.push(turn(`q${index} ${'q'.repeat(120)}`), answer(`a${index} ${'a'.repeat(120)}`))
+    capture.handler(session('session-retry', messages), { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await new Promise(resolve => setTimeout(resolve, 80))
+    capture.handler(session('session-retry', messages), { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await new Promise(resolve => setTimeout(resolve, 120))
+    const attempts = deletes.filter(ids => ids.includes('dsh-session-retry'))
+    assert.ok(attempts.length >= 2, `the refused deletion was not retried (${attempts.length})`)
+  } finally {
+    host.restore()
+  }
+})
+
+test('a surface that shrinks does not delete parts', async () => {
+  const deletes = []
+  const host = await createHost({
+    config: { captureDebounceMs: 5, container: 'dsh', maxCaptureChars: 1200, captureTurnsPerChunk: 2, minCaptureChars: 5 },
+    fetchHandler: (url, init) => {
+      const method = init.method || 'GET'
+      if (method === 'PATCH') return { status: 404, body: { error: 'Document not found' } }
+      if (method === 'POST') return { body: { id: 'x', status: 'queued' } }
+      if (method === 'DELETE') { deletes.push(JSON.parse(String(init.body)).ids); return { body: { count: 1, errors: [] } } }
+      return { body: {} }
+    },
+  })
+  try {
+    const capture = hook(host, 'session/event')
+    const big = []
+    for (let index = 0; index < 20; index += 1) big.push(turn(`q${index} ${'q'.repeat(120)}`), answer(`a${index} ${'a'.repeat(120)}`))
+    capture.handler(session('session-shrink', big), { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await new Promise(resolve => setTimeout(resolve, 80))
+    deletes.length = 0
+    capture.handler(session('session-shrink', big.slice(0, 6)), { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await new Promise(resolve => setTimeout(resolve, 80))
+    assert.deepEqual(deletes, [], 'a shrunken surface deleted documents holding turns')
+  } finally {
+    host.restore()
+  }
+})

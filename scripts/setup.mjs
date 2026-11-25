@@ -20,7 +20,12 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout, argv, env, exit } from 'node:process'
 import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { internals } from '../index.js'
+
+const PACKAGE_VERSION = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version
 
 // `npx supermemory local start` listens on PORT or 8787; Hermes setups often run it
 // on 6767, so both are probed before asking the operator to choose.
@@ -237,7 +242,7 @@ async function main() {
     console.log(plan.row)
     console.log('\n== Next steps ==\n')
     console.log('  1. Install the bundle (it inserts its own row, so nothing has to be pasted):')
-    console.log('       dsh plugin --profile <profile> add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"')
+    console.log(`       dsh plugin --profile <profile> add "git+https://github.com/eagurin/dsh-supermemory.git#v${PACKAGE_VERSION}"`)
     console.log(`  2. Put the key into the DSH credential store under ${plan.apiKeyRef}:`)
     console.log('       $DSH_HOME/.credentials.yaml → version: 1, refs: { ' + plan.apiKeyRef + ': <key> }')
     console.log(`       ${mode === 'cloud' ? '(key from https://console.supermemory.ai)' : '(local: cat ~/.supermemory/api-key)'}`)

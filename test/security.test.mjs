@@ -84,24 +84,25 @@ test('the recall block is delimited by a per-turn nonce and its content is sanit
   }
 })
 
-test('earlier recall blocks are pruned, so they cannot accumulate in the transcript', async () => {
+test('recall inserts one block and leaves the existing messages intact', async () => {
   const host = await createHost({
     fetchHandler: url => (url.includes('/search') ? { body: { results: [{ memory: 'a stable fact about the project', similarity: 0.7 }] } } : { body: {} }),
   })
   try {
     const preStep = hook(host, 'agent/pre-step')
     const stale = { role: 'user', content: [{ type: 'text', text: 'old recall' }], source: { kind: 'supermemory', form: 'recall' } }
-    const decision = {
-      kind: 'enter',
-      messages: [stale, { role: 'user', content: [{ type: 'text', text: 'new question' }], source: { kind: 'user' } }],
-    }
+    const human = { role: 'user', content: [{ type: 'text', text: 'new question' }], source: { kind: 'user' } }
+    const decision = { kind: 'enter', messages: [stale, human] }
     const result = await preStep.handler(
       { agent: { id: 'sess-2', session: { header: {} } }, messages: decision.messages, turn: 2, step: 1, signal: new AbortController().signal },
       async () => decision,
     )
     const recallMessages = result.messages.filter(message => message.source && message.source.kind === 'supermemory')
-    assert.equal(recallMessages.length, 1, 'an old recall block survived')
-    assert.notEqual(recallMessages[0], stale)
+    // A durable block from a previous turn cannot be removed from this hook; the
+    // new block is appended before the human message and nothing is dropped.
+    assert.equal(recallMessages.length, 2)
+    assert.equal(result.messages.includes(human), true)
+    assert.equal(result.messages.at(-1), human)
   } finally {
     host.restore()
   }
@@ -256,4 +257,76 @@ test('allowWritesToReadContainers never reaches a Hermes namespace', () => {
 test('a base URL with embedded credentials is rejected', () => {
   assert.throws(() => resolveSettings({ baseUrl: 'https://user:token@example.test' }), /must not embed credentials/)
   assert.throws(() => resolveSettings({ baseUrl: 'ftp://example.test' }), /http\(s\) URL/)
+})
+
+test('forget by id reports a refused deletion instead of claiming success', async () => {
+  let response = { body: { count: 1, errors: [], matches: [] } }
+  const host = await createHost({
+    fetchHandler: url => (url.includes('/memories') ? response : { body: {} }),
+  })
+  try {
+    const tool = host.tools.get('supermemory_forget')
+    const ok = await tool.execute({ memoryId: 'mem-1', confirm: 'delete' }, { signal: new AbortController().signal })
+    assert.match(ok.text, /Deleted memory mem-1/)
+
+    response = { body: { count: 0, errors: [{ id: 'mem-2', error: 'Memory not found' }] } }
+    await assert.rejects(
+      () => tool.execute({ memoryId: 'mem-2', confirm: 'delete' }, { signal: new AbortController().signal }),
+      /was not deleted/,
+    )
+  } finally {
+    host.restore()
+  }
+})
+
+test('semantic forget renders the v5 matches shape', async () => {
+  const host = await createHost({
+    fetchHandler: url => (url.includes('/memories/semantic')
+      ? { body: { count: 2, errors: [], matches: [{ id: 'm1', memory: 'old preference about tabs' }, { id: 'm2', memory: 'stale project note' }] } }
+      : { body: {} }),
+  })
+  try {
+    const tool = host.tools.get('supermemory_forget')
+    const preview = await tool.execute({ query: 'old things' }, { signal: new AbortController().signal })
+    assert.match(preview.text, /2 match\(es\)/)
+    assert.match(preview.text, /old preference about tabs/)
+  } finally {
+    host.restore()
+  }
+})
+
+test('namespace deletion requires confirm even for a writable namespace', async () => {
+  const host = await createHost({ config: { writeContainers: ['scratch'] } })
+  try {
+    const tool = host.tools.get('supermemory_namespace')
+    await assert.rejects(
+      () => tool.execute({ action: 'delete', namespace: 'scratch' }, { signal: new AbortController().signal }),
+      /without confirm/,
+    )
+    assert.equal(host.calls.some(call => call.method === 'DELETE'), false)
+  } finally {
+    host.restore()
+  }
+})
+
+test('readVerifiedFile refuses a hard link and a symlink', async () => {
+  const { readVerifiedFile } = internals
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-read-'))
+  const inside = join(dir, 'plain.txt')
+  writeFileSync(inside, 'content')
+  const outside = join(dir, '..', 'target-secret.txt')
+  writeFileSync(outside, 'secret')
+  try {
+    assert.equal(readVerifiedFile(inside, 1024).toString(), 'content')
+    const hard = join(dir, 'hard.txt')
+    linkSync(outside, hard)
+    assert.throws(() => readVerifiedFile(hard, 1024), /hard links|hard link/i)
+    const link = join(dir, 'sym.txt')
+    symlinkSync(outside, link)
+    assert.throws(() => readVerifiedFile(link, 1024), /cannot open|safely/i)
+    assert.throws(() => readVerifiedFile(inside, 2), /above the 2 byte limit/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(outside, { force: true })
+  }
 })

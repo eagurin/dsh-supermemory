@@ -4,6 +4,59 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] — 2026-11-25
+
+Follow-up review of the v0.5.0 patch itself. One release blocker and several real
+defects; behaviour that 0.5.0 claimed but could not deliver is now described
+honestly instead.
+
+### Fixed
+
+- **Every session's first turn could fail.** The profile-fetch error path referenced
+  an out-of-scope `options`, so a failing `/profile` call (missing key, slow or
+  unreachable server, fresh namespace) threw `ReferenceError` inside
+  `agent/pre-step` and ended the turn with an error instead of degrading. The
+  failure list is now passed explicitly and a failing profile is just a warning.
+- **The recall block lost its closing marker when truncated**, leaving the human
+  question inside an unterminated "untrusted" region. The body is clamped and the
+  nonce closer is appended afterwards.
+- **Refused deletions were treated as success.** The document endpoint can refuse a
+  document that is still processing; the plugin dropped such ids from its state and
+  never retried, leaving duplicate documents. Only confirmed deletions are
+  forgotten now, the rest retry on the next flush.
+- **A checkpoint without an id re-created the original data loss** by falling back
+  to the first document family and deleting the parts that held earlier turns. The
+  identity now comes from `id`, then `source.compactionId`, then the text, and a
+  checkpoint never maps to the original family.
+- **A surface that shrinks for another reason (rewind, rewrite) deleted documents**
+  holding turns that existed nowhere else. A shrink no longer retires anything.
+- `container` may no longer name a Hermes namespace (it was the last write path that
+  bypassed the guard); the capture loop cannot produce an unhandled rejection;
+  dead per-session state was removed.
+- `defineTool` enforces required arguments for definitions that already pass a JSON
+  Schema; `search` reports memory ids (`v5` returns no document ids); forget's
+  description no longer mentions the removed `dryRun` flag and describes the
+  server's soft delete correctly; `scripts/setup.mjs` derives the install tag from
+  `package.json`, and `check.mjs` fails if it is hardcoded again.
+
+### Changed
+
+- Chunked documents no longer include the total part count in their header, so
+  adding a part does not invalidate every earlier part's content hash.
+
+### Corrected documentation
+
+- 0.5.0 claimed that earlier recall blocks are pruned from the transcript. They
+  cannot be removed from that hook, so the code no longer pretends to: the block
+  stays, bounded by `recallMaxChars` and `maxRecallResults`.
+
+### Tests
+
+83 → 92 cases: profile-failure degradation, truncated-closer containment, refused
+deletion retry, id-less checkpoint family, shrink safety, forget by id (success and
+refusal), the `matches` response shape, the confirm gate on a writable namespace,
+and `readVerifiedFile` (hard link, symlink, size cap).
+
 ## [0.5.0] — 2026-11-25
 
 Security and conformance release from four independent reviews (code, security, DSH

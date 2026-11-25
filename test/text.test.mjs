@@ -49,14 +49,14 @@ test('mergeFacts drops duplicates, sorts by similarity, and honors the limit', (
       { memory: 'second fact with enough length', similarity: 0.5 },
     ] },
     { container: 'hermes_default', results: [
-      { memory: 'third fact with enough length', similarity: 0.7, documentId: 'doc-3' },
+      { memory: 'third fact with enough length', similarity: 0.7, id: 'mem-3' },
     ] },
   ]
   const facts = mergeFacts(groups, 2)
   assert.equal(facts.length, 2)
   assert.equal(facts[0].text, 'second fact with enough length')
   assert.equal(facts[1].container, 'hermes_default')
-  assert.equal(facts[1].documentId, 'doc-3')
+  assert.equal(facts[1].memoryId, 'mem-3')
 })
 
 test('mergeFacts skips text that is too short to be a fact', () => {

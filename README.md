@@ -52,7 +52,7 @@ The canonical path is DSH itself — it installs the bundle and applies the bund
 `cordis.patch.yml`, so no profile row is needed:
 
 ```bash
-dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"
+dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"
 ```
 
 The same operation is available in the GUI: **Settings → Plugins → Install from URL**. After the
@@ -61,7 +61,7 @@ install, the row appears in the profile automatically with local-server defaults
 <details>
 <summary>Installing with pnpm or copying the row by hand (advanced)</summary>
 
-`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"` inside the profile directory
+`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"` inside the profile directory
 installs the package but does **not** add it to `dsh.profile.bundles`, so the plugin stays inactive.
 If you install that way, either select the bundle in the GUI, or add the row yourself — and note that
 `- id: supermemory` alone is an **override** (it replaces an existing entry), while a fresh profile

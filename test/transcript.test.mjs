@@ -35,7 +35,7 @@ test('a long session is clamped from the tail and marked', () => {
   const plan = buildTranscriptChunks(fakeSession(messages), resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 10, minCaptureChars: 10 }))
   assert.ok(plan.chunked, 'a session over the budget must be chunked')
   const last = plan.documents.at(-1).content
-  assert.match(last, /часть|part \d+ of \d+/)
+  assert.match(last, /\(part \d+\)/)
   assert.match(last, /ответ номер 39/)
 })
 

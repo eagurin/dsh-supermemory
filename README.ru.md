@@ -51,7 +51,7 @@ node scripts/setup.mjs --json          # машинный план (код 3 и 
 строка в профиле не нужна.
 
 ```bash
-dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"
+dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"
 ```
 
 То же в GUI: **Settings → Plugins → Install from URL**. После установки строка появляется в профиле
@@ -60,7 +60,7 @@ dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory
 <details>
 <summary>Установка через pnpm или вставка строки вручную (продвинутое)</summary>
 
-`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.0"` внутри каталога профиля ставит
+`pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.1"` внутри каталога профиля ставит
 пакет, но **не** добавляет его в `dsh.profile.bundles`, поэтому плагин останется неактивным. Если
 ставите так — выберите бандл в GUI либо добавьте строку сами; при этом `- id: supermemory` — это
 **оверрайд** (заменяет существующую запись), а на чистом профиле нужен `insert`:
