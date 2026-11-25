@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-supermemory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Supermemory long-term memory for DeepSeek Harness: profile-scoped own memory plus read access to other agents' Supermemory containers",
   "type": "module",
   "private": true,
@@ -42,14 +42,19 @@
     "README.md",
     "AGENTS.md",
     "CHANGELOG.md",
-    "docs"
+    "docs",
+    "test"
   ],
   "scripts": {
-    "check": "node --check index.js && node scripts/check.mjs"
+    "check": "node --check index.js && node scripts/check.mjs",
+    "test": "node --test test/"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.19.0"
   }
 }

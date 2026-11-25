@@ -79,6 +79,11 @@ assert(/export const inject = \[[^\]]*'tools'/.test(entry), "index.js must injec
 assert(/export const inject = \[[^\]]*'systemPrompt'/.test(entry), "index.js must inject 'systemPrompt'")
 assert(/export const inject = \[[^\]]*'credentials'/.test(entry), "index.js must inject 'credentials'")
 assert(/export function apply\(ctx, raw\)/.test(entry), 'index.js must export apply(ctx, raw)')
+assert(/export const Config/.test(entry), 'index.js must export the Config schema for the Settings page')
+assert(/export const internals/.test(entry), 'index.js must export internals so the unit tests can reach the pure helpers')
+assert(existsSync(join(root, 'test')), 'missing file: test/ (unit tests)')
+assert(typeof manifest?.scripts?.test === 'string', 'declare scripts.test so CI runs the unit tests')
+assert(manifest?.dependencies?.['@deepseek-ai/schemastery'] !== undefined, 'declare @deepseek-ai/schemastery so a git install resolves the Config schema')
 
 // Every default the runtime declares must be documented in the README table,
 // otherwise the table silently drifts away from the code.

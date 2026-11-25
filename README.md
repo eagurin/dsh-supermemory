@@ -84,18 +84,52 @@
 | `maxCaptureChars` | `120000` | Верхняя граница размера захватываемой сессии. |
 | `minCaptureChars` | `80` | Сессии короче этого не записываются. |
 | `captureRetries` | `3` | Повторы записи при сетевой ошибке. |
+| `filter` | `""` | Фильтр по метаданным (JSON) для recall в своём namespace; пусто — без фильтра. |
+| `rewriteQuery` | `false` | Сервер переформулирует запрос recall. Точнее, но добавляет ~2 с к ходу. |
+| `ingestWaitMs` | `1500` | Сколько `supermemory_save` ждёт обработки, прежде чем вернуть статус. |
 
 ## Инструменты
 
 | Инструмент | Назначение |
 |---|---|
-| `supermemory_search` | Семантический поиск по всем читаемым namespace или по указанному. |
+| `supermemory_search` | Семантический поиск по всем читаемым namespace или по указанному; принимает `filter` (JSON) и `rewriteQuery`. |
 | `supermemory_profile` | Постоянные факты и свежий контекст, опционально с поиском по запросу. |
-| `supermemory_save` | Сохранить документ в записываемый namespace (обработка асинхронная). |
+| `supermemory_save` | Сохранить документ в записываемый namespace и вернуть статус обработки (`queued` / `processing` / `done` / `failed`). |
 | `supermemory_forget` | Удалить память по id или по описанию, с предварительным просмотром `dryRun`. |
-| `supermemory_read_document` | Прочитать сохранённый документ или прошлую беседу по id, с постраничным смещением. |
-| `supermemory_list` | Список документов или memories в namespace. |
+| `supermemory_read_document` | Прочитать сохранённый документ или прошлую беседу по id, с постраничным смещением; показывает статус обработки. |
+| `supermemory_list` | Список документов или memories в namespace, со статусом обработки. |
 | `supermemory_namespaces` | Подключение, собственный namespace и все namespace сервера со счётчиками. |
+
+## Фильтры по метаданным
+
+Плагин пишет в метаданные документов `sm_source`, `source_agent`, `type`
+(`conversation` для сессий, `note` для явных сохранений), `session_id`, `turns`,
+`workspace`, `updated_at`. По ним можно фильтровать поиск — и в recall
+(`filter` в конфиге), и в одном вызове (`filter` у `supermemory_search`).
+
+Проверено на живом сервере: запрос «какие репозитории у пользователя» без фильтра
+отдаёт пять фрагментов сессий подряд, а с фильтром — заметки с фактами:
+
+```json
+{ "field": "type", "operator": "neq", "value": "conversation" }
+```
+
+Вложенные условия (`and` / `or`) тоже работают:
+
+```json
+{ "operator": "and", "operands": [
+  { "field": "source_agent", "operator": "eq", "value": "deepseek-harness" },
+  { "field": "type", "operator": "neq", "value": "conversation" }
+] }
+```
+
+Допустимые операторы: `eq`, `neq`, `contains`, `notContains`, `gt`, `gte`, `lt`,
+`lte`, `arrayContains`, `arrayNotContains`; вложенность до 5 уровней. Фильтр из
+конфига применяется только к своему namespace: у чужих агентов своя схема
+метаданных, и чужой фильтр молча выбросил бы их факты.
+
+> `rewriteQuery` по умолчанию выключен: на живом сервере он добавляет ~2,7 с к
+> поиску, а на первом шаге хода это заметно.
 
 ## Безопасность и ограничения
 

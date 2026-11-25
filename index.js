@@ -23,6 +23,19 @@ import { createHash, randomUUID } from 'node:crypto'
 
 export const name = 'supermemory'
 
+/**
+ * Config schema: it gives the Settings page typed fields and the Loader a
+ * validated `config`. `@deepseek-ai/schemastery` is a real dependency, so a git
+ * install resolves it; a plain directory link has no dependency tree, and there
+ * the schema is omitted — `resolveSettings` validates on its own either way.
+ */
+let schema
+try {
+  schema = (await import('@deepseek-ai/schemastery')).default
+} catch {
+  schema = undefined
+}
+
 /** Services this plugin needs; without them it stays inactive. */
 export const inject = ['tools', 'systemPrompt', 'credentials']
 
@@ -57,6 +70,102 @@ const DEFAULTS = {
   maxCaptureChars: 120000,
   minCaptureChars: 80,
   captureRetries: 3,
+  /** Metadata filter applied to recall in this agent's own namespace; empty means none. */
+  filter: '',
+  /** Let the server rewrite the recall query; costs roughly two extra seconds per turn. */
+  rewriteQuery: false,
+  /** How long a save waits for the document to be processed before returning. */
+  ingestWaitMs: 1500,
+}
+
+/** Every key the Loader row may set; anything else is a typo and fails loudly. */
+const CONFIG_KEYS = Object.keys(DEFAULTS)
+
+/**
+ * Metadata filter operators the namespace API accepts.
+ * @see FilterExpression in the server's openapi.json
+ */
+const FILTER_OPERATORS = new Set(['eq', 'neq', 'contains', 'notContains', 'gt', 'gte', 'lt', 'lte', 'arrayContains', 'arrayNotContains'])
+
+/** Config schema for the Loader row and the Settings page. */
+export const Config = schema === undefined ? undefined : schema.object({
+  baseUrl: schema.string().default(DEFAULTS.baseUrl).description('Supermemory server: a local `npx supermemory local` or https://api.supermemory.ai'),
+  apiKeyRef: schema.string().default(DEFAULTS.apiKeyRef).description('Credential reference holding the API key'),
+  container: schema.string().default(DEFAULTS.container).description('This agent\'s own namespace; the only one written by default'),
+  readContainers: schema.array(schema.string()).default(DEFAULTS.readContainers).description('Namespaces this agent may read'),
+  readPrefixes: schema.array(schema.string()).default(DEFAULTS.readPrefixes).description('Namespace prefixes discovered as readable'),
+  writeContainers: schema.array(schema.string()).default(DEFAULTS.writeContainers).description('Extra namespaces this agent may write'),
+  allowWritesToReadContainers: schema.boolean().default(DEFAULTS.allowWritesToReadContainers).description('Allow tools to write into read-only namespaces'),
+  autoRecall: schema.boolean().default(DEFAULTS.autoRecall).description('Recall memory before the first step of a turn'),
+  autoCapture: schema.boolean().default(DEFAULTS.autoCapture).description('Capture a finished turn as one document'),
+  recallSubagents: schema.boolean().default(DEFAULTS.recallSubagents).description('Give subagents recall too'),
+  captureSubagents: schema.boolean().default(DEFAULTS.captureSubagents).description('Write subagent sessions into memory'),
+  maxRecallResults: schema.number().default(DEFAULTS.maxRecallResults).description('Facts admitted into one turn'),
+  minQueryChars: schema.number().default(DEFAULTS.minQueryChars).description('Shortest question worth a recall search'),
+  searchMode: schema.union(['hybrid', 'memories', 'chunks']).default(DEFAULTS.searchMode).description('Search surface'),
+  threshold: schema.number().default(DEFAULTS.threshold).description('Minimum relevance'),
+  rerank: schema.union(['none', 'order', 'aggregate']).default(DEFAULTS.rerank).description('Server-side reranking'),
+  profileFrequency: schema.number().default(DEFAULTS.profileFrequency).description('Profile every N turns; 0 disables'),
+  profileMaxChars: schema.number().default(DEFAULTS.profileMaxChars).description('Character budget for the profile block'),
+  recallMaxChars: schema.number().default(DEFAULTS.recallMaxChars).description('Character budget for the whole recall block'),
+  recallTimeoutMs: schema.number().default(DEFAULTS.recallTimeoutMs).description('Recall budget; the turn continues without memory'),
+  timeoutMs: schema.number().default(DEFAULTS.timeoutMs).description('Timeout for an ordinary API request'),
+  dreaming: schema.union(['instant', 'dynamic']).default(DEFAULTS.dreaming).description('Document processing mode'),
+  captureDebounceMs: schema.number().default(DEFAULTS.captureDebounceMs).description('Delay before writing a finished turn'),
+  maxCaptureChars: schema.number().default(DEFAULTS.maxCaptureChars).description('Largest captured transcript'),
+  minCaptureChars: schema.number().default(DEFAULTS.minCaptureChars).description('Shortest session worth capturing'),
+  captureRetries: schema.number().default(DEFAULTS.captureRetries).description('Retries after a failed capture'),
+  filter: schema.string().default(DEFAULTS.filter).description('Metadata filter (JSON) applied to recall in the own namespace'),
+  rewriteQuery: schema.boolean().default(DEFAULTS.rewriteQuery).description('Let the server rewrite the recall query'),
+  ingestWaitMs: schema.number().default(DEFAULTS.ingestWaitMs).description('How long a save waits for processing'),
+}).description('Supermemory long-term memory for DeepSeek Harness')
+
+/**
+ * Validate a metadata filter, accepting an object or its JSON text.
+ * @param {unknown} value - filter expression, JSON string, or empty.
+ * @param {string} [path] - name used in error messages.
+ * @returns {object | undefined} a normalized expression, or undefined when absent.
+ */
+function normalizeFilter(value, path = 'filter') {
+  if (value === undefined || value === null) return undefined
+  let node = value
+  if (typeof node === 'string') {
+    const text = node.trim()
+    if (!text) return undefined
+    try {
+      node = JSON.parse(text)
+    } catch (error) {
+      throw new Error(`${path}: expected JSON metadata filters (${error instanceof Error ? error.message : String(error)})`)
+    }
+  }
+  const walk = (current, depth) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      throw new Error(`${path}: expected a filter object at depth ${depth}`)
+    }
+    if (current.operator === 'and' || current.operator === 'or') {
+      if (depth > 5) throw new Error(`${path}: nesting is limited to 5 levels`)
+      const operands = current.operands
+      if (!Array.isArray(operands) || operands.length === 0) {
+        throw new Error(`${path}: operator "${current.operator}" needs a non-empty operands array`)
+      }
+      return { operator: current.operator, operands: operands.map(item => walk(item, depth + 1)) }
+    }
+    const field = current.field
+    if (typeof field !== 'string' || !/^[a-zA-Z0-9_.-]+$/.test(field)) {
+      throw new Error(`${path}: "field" must match ^[a-zA-Z0-9_.-]+$, got ${JSON.stringify(field)}`)
+    }
+    if (!FILTER_OPERATORS.has(current.operator)) {
+      throw new Error(`${path}: unsupported operator ${JSON.stringify(current.operator)}; allowed: ${[...FILTER_OPERATORS].join(', ')}`)
+    }
+    const compare = current.value
+    if (compare === undefined || compare === null || typeof compare === 'object') {
+      throw new Error(`${path}: "value" must be a string, number, or boolean`)
+    }
+    const predicate = { field, operator: current.operator, value: compare }
+    if (typeof current.caseSensitive === 'boolean') predicate.caseSensitive = current.caseSensitive
+    return predicate
+  }
+  return walk(node, 1)
 }
 
 /**
@@ -67,6 +176,14 @@ const DEFAULTS = {
  */
 function resolveSettings(raw) {
   const input = raw && typeof raw === 'object' ? raw : {}
+  const unknown = Object.keys(input).filter(key => !CONFIG_KEYS.includes(key))
+  if (unknown.length > 0) {
+    // A typo in a setting used to be silently ignored ("threshod" instead of
+    // "threshold" left the threshold at its default), so it fails loudly now.
+    throw new Error(
+      `unknown configuration key(s): ${unknown.join(', ')}; allowed keys: ${CONFIG_KEYS.join(', ')}`,
+    )
+  }
   const settings = { ...DEFAULTS, ...input }
 
   const text = (value, fallback) => (typeof value === 'string' && value.trim() ? value.trim() : fallback)
@@ -106,6 +223,9 @@ function resolveSettings(raw) {
   settings.maxCaptureChars = Math.round(num(input.maxCaptureChars, 120000, 1000, 2000000))
   settings.minCaptureChars = Math.round(num(input.minCaptureChars, 80, 0, 100000))
   settings.captureRetries = Math.round(num(input.captureRetries, 3, 0, 10))
+  settings.filter = normalizeFilter(input.filter, 'filter')
+  settings.rewriteQuery = bool(input.rewriteQuery, false)
+  settings.ingestWaitMs = Math.round(num(input.ingestWaitMs, 1500, 0, 30000))
   return settings
 }
 
@@ -115,7 +235,9 @@ function resolveSettings(raw) {
  * @returns {string} a name the API accepts.
  */
 function sanitizeContainer(value) {
-  const cleaned = String(value).trim().replace(/[^a-zA-Z0-9_:]/g, '_')
+  // The API pattern is ^[a-zA-Z0-9_:-]+$, so a hyphen is legal and must survive:
+  // rewriting it would silently point at a different namespace.
+  const cleaned = String(value).trim().replace(/[^a-zA-Z0-9_:-]/g, '_')
   return cleaned || DEFAULT_CONTAINER
 }
 
@@ -299,7 +421,12 @@ function clampLines(lines, maxChars, keep = 'head') {
   }
   if (keep === 'tail') kept.reverse()
   const joined = kept.join('\n')
-  return joined.length > maxChars ? `${joined.slice(0, Math.max(0, maxChars - 20))}\n…[truncated]` : joined
+  if (joined.length <= maxChars) return joined
+  // A budget smaller than the marker itself cannot carry a marker: hard-cut it,
+  // otherwise the slice arithmetic returns an empty string.
+  const marker = '\n…[truncated]'
+  if (maxChars <= marker.length) return joined.slice(0, Math.max(0, maxChars))
+  return `${joined.slice(0, maxChars - marker.length)}${marker}`
 }
 
 /**
@@ -308,7 +435,7 @@ function clampLines(lines, maxChars, keep = 'head') {
  * @param {object} ctx - plugin context.
  * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
  * @param {string} query - the user's question.
- * @param {{profileTexts?: Map<string, string>, signal?: AbortSignal}} options - extra context.
+ * @param {{profileTexts?: Map<string, string>, signal?: AbortSignal, filter?: object}} options - extra context.
  * @returns {Promise<string>} the model-facing block, or an empty string.
  */
 async function buildRecall(ctx, settings, query, options = {}) {
@@ -326,6 +453,11 @@ async function buildRecall(ctx, settings, query, options = {}) {
           threshold: settings.threshold,
           rerank: settings.rerank,
           include: { documents: false },
+          // The filter targets this agent's own metadata schema; another
+          // agent's namespace has its own keys, so filtering it is left to an
+          // explicit tool call with `filter`.
+          ...(container === settings.container && options.filter ? { filter: options.filter } : {}),
+          ...(settings.rewriteQuery ? { rewriteQuery: true } : {}),
         },
         timeoutMs: settings.recallTimeoutMs,
         signal: options.signal,
@@ -386,6 +518,62 @@ async function fetchProfileText(ctx, settings, container, signal) {
   } catch {
     return ''
   }
+}
+
+/**
+ * Read one document's processing state.
+ * @param {object} ctx - plugin context.
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @param {string} container - namespace holding the document.
+ * @param {string} documentId - document id.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<{status: string, createdAt?: string, updatedAt?: string}>} processing state.
+ */
+async function fetchDocumentStatus(ctx, settings, container, documentId, signal) {
+  const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/document/${encodeURIComponent(documentId)}`, {
+    timeoutMs: settings.timeoutMs,
+    signal,
+  })
+  const system = (data && data.system) || (data && data.document && data.document.system) || {}
+  const status = typeof system.status === 'string' ? system.status : 'unknown'
+  return {
+    status,
+    ...(typeof system.createdAt === 'string' ? { createdAt: system.createdAt } : {}),
+    ...(typeof system.updatedAt === 'string' ? { updatedAt: system.updatedAt } : {}),
+  }
+}
+
+/**
+ * Wait briefly for a document to finish processing, so a save can report whether
+ * the facts are searchable yet instead of guessing.
+ * @param {object} ctx - plugin context.
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @param {string} container - namespace holding the document.
+ * @param {string} documentId - document id.
+ * @param {AbortSignal} [signal] - cancellation.
+ * @returns {Promise<{status: string, createdAt?: string, updatedAt?: string}>} the last observed state.
+ */
+async function waitForIngest(ctx, settings, container, documentId, signal) {
+  const deadline = Date.now() + Math.max(0, settings.ingestWaitMs)
+  let observed = { status: 'unknown' }
+  for (;;) {
+    try {
+      observed = await fetchDocumentStatus(ctx, settings, container, documentId, signal)
+    } catch {
+      return observed
+    }
+    if (observed.status === 'done' || observed.status === 'failed') return observed
+    if (Date.now() >= deadline) return observed
+    await new Promise(resolve => setTimeout(resolve, 400))
+  }
+}
+
+/** Human sentence for one ingest status. */
+function ingestText(status) {
+  if (status === 'done') return 'processed: its memories and profile are searchable now'
+  if (status === 'failed') return 'processing failed on the server; the document is stored but will not become memories'
+  if (status === 'queued' || status === 'processing') return 'still processing: facts appear asynchronously, search again later'
+  return 'processing state unknown: check again with supermemory_read_document'
 }
 
 /**
@@ -602,6 +790,29 @@ async function upsertDocument(ctx, settings, container, documentId, content, met
  * @param {object} ctx - Host Cordis context.
  * @param {unknown} raw - the Loader row's config.
  */
+/**
+ * Pure helpers exported for the unit tests: they are the parts of the plugin that
+ * can be checked without a Host or a Supermemory server.
+ */
+export const internals = {
+  DEFAULTS,
+  CONFIG_KEYS,
+  FILTER_OPERATORS,
+  resolveSettings,
+  normalizeFilter,
+  sanitizeContainer,
+  isHermesContainer,
+  containerLabel,
+  mergeFacts,
+  resultText,
+  profileFacts,
+  clampLines,
+  messageText,
+  lastUserMessage,
+  buildTranscript,
+  ingestText,
+}
+
 export function apply(ctx, raw) {
   const settings = resolveSettings(raw)
   const readableContainers = makeContainerResolver(ctx, settings)
@@ -678,7 +889,12 @@ export function apply(ctx, raw) {
 
       let block = ''
       try {
-        block = await buildRecall(ctx, settings, query, { readable, profileTexts, signal: payload.signal })
+        block = await buildRecall(ctx, settings, query, {
+          readable,
+          profileTexts,
+          signal: payload.signal,
+          filter: settings.filter,
+        })
       } catch (error) {
         log('debug', `recall skipped: ${error instanceof Error ? error.message : String(error)}`)
         return decision
@@ -796,6 +1012,8 @@ export function apply(ctx, raw) {
       container: { type: 'string', description: 'Only this namespace. Defaults to searching all readable namespaces.' },
       limit: { type: 'integer', description: 'Maximum facts to return, 1-20. Defaults to 6.' },
       mode: { type: 'string', enum: ['hybrid', 'memories', 'chunks'], description: 'Search surface. Defaults to hybrid.' },
+      filter: { type: 'string', description: 'Metadata filter as JSON, e.g. {"field":"type","operator":"neq","value":"conversation"} or {"operator":"and","operands":[...]}. Applied to every searched namespace.' },
+      rewriteQuery: { type: 'boolean', description: 'Let the server rewrite the query before searching; more accurate but adds ~2 s.' },
     },
     output: {
       schema: {
@@ -818,6 +1036,8 @@ export function apply(ctx, raw) {
       const containers = args.container
         ? [await resolveReadContainer(args.container)]
         : [settings.container, ...(await readableContainers())]
+      const filter = normalizeFilter(args.filter, 'filter')
+      const rewrite = args.rewriteQuery === undefined ? settings.rewriteQuery : args.rewriteQuery === true
       const groups = await Promise.all(containers.map(async container => {
         try {
           const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/search`, {
@@ -829,6 +1049,8 @@ export function apply(ctx, raw) {
               threshold: settings.threshold,
               rerank: settings.rerank,
               include: { documents: false },
+              ...(filter ? { filter } : {}),
+              ...(rewrite ? { rewriteQuery: true } : {}),
             },
             timeoutMs: settings.timeoutMs,
             signal: exec.signal,
@@ -924,9 +1146,10 @@ export function apply(ctx, raw) {
         properties: {
           container: { type: 'string' },
           documentId: { type: 'string' },
+          status: { type: 'string' },
           text: { type: 'string' },
         },
-        required: ['container', 'documentId', 'text'],
+        required: ['container', 'documentId', 'status', 'text'],
       },
       render: (_args, value) => [{ type: 'text', text: value.text }],
     },
@@ -946,8 +1169,9 @@ export function apply(ctx, raw) {
         body,
         signal: exec.signal,
       })
-      const text = `Stored document ${documentId} in \`${container}\`. Supermemory will process it into memories asynchronously.`
-      return { container, documentId, text }
+      const ingest = await waitForIngest(ctx, settings, container, documentId, exec.signal)
+      const text = `Stored document ${documentId} in \`${container}\` — ${ingestText(ingest.status)} (status: ${ingest.status}).`
+      return { container, documentId, status: ingest.status, text }
     },
   })
 
@@ -1031,12 +1255,15 @@ export function apply(ctx, raw) {
         signal: exec.signal,
       })
       const content = String((data && (data.content ?? data.document?.content)) || '')
+      const system = (data && data.system) || (data && data.document && data.document.system) || {}
+      const status = typeof system.status === 'string' ? system.status : 'unknown'
       const offset = Math.max(0, Number(args.offset) || 0)
       const limit = Math.min(20000, Math.max(500, Number(args.limit) || 8000))
       const slice = content.slice(offset, offset + limit)
       const more = offset + limit < content.length
       const text = [
         `Document ${documentId} in \`${container}\`${data && data.title ? ` — ${data.title}` : ''}`,
+        `Status: ${status}${system.updatedAt ? ` · updated ${system.updatedAt}` : ''}`,
         `Characters ${offset}-${Math.min(content.length, offset + limit)} of ${content.length}${more ? ' (call again with a larger offset for more)' : ''}`,
         '',
         slice || '(empty document)',
@@ -1085,7 +1312,8 @@ export function apply(ctx, raw) {
         const id = item.id || ''
         const title = String(item.title || item.memory || item.chunk || '').replace(/\s+/g, ' ').slice(0, 160)
         const created = item.system && item.system.createdAt ? ` · ${item.system.createdAt}` : ''
-        lines.push(`- ${id}${created} · ${title}`)
+        const status = item.system && item.system.status ? ` · ${item.system.status}` : ''
+        lines.push(`- ${id}${created}${status} · ${title}`)
       }
       if (items.length === 0) lines.push('No items.')
       return { container, count: items.length, text: lines.join('\n') }

@@ -10,14 +10,18 @@ permissions:
 
 jobs:
   check:
-    name: Syntax and repository checks
+    name: Syntax, repository checks, and unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install the config-schema dependency
+        run: npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0
       - name: Syntax check
         run: node --check index.js
       - name: Manifest, patch, locales, docs, and secrets
         run: node scripts/check.mjs
+      - name: Unit tests
+        run: node --test test/
