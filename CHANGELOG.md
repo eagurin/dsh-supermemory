@@ -4,6 +4,28 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] — 2026-11-25
+
+Fixes a real-world failure: on a brand-new session the agent received only the recall
+block and asked the user what to do, although the task was in the chat.
+
+### Fixed
+
+- **The recall block no longer precedes the user's request.** A turn therefore sent
+  two consecutive user messages — the recall block, then the question — and a gateway
+  that collapses consecutive user turns kept only the first, so the question never
+  reached the model. The block is now inserted *after* the human message; the
+  request survives any collapse order, and a gateway that concatenates still gets the
+  question before the background. The block header now says where the request is.
+- The session log of the reported case confirmed the shape: the recall message was
+  committed before the human message, and the model's reasoning explicitly said it saw
+  only the recall block.
+
+### Tests
+
+92 cases; the recall test is now an ordering invariant — the human message must stay
+the first user message of the turn, with the block directly after it.
+
 ## [0.5.2] — 2026-11-25
 
 Documentation-only release: the install instructions named a command that does not

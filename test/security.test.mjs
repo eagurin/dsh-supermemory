@@ -84,25 +84,26 @@ test('the recall block is delimited by a per-turn nonce and its content is sanit
   }
 })
 
-test('recall inserts one block and leaves the existing messages intact', async () => {
+test('recall never precedes the user request in the turn', async () => {
+  // A gateway that collapses consecutive user messages can keep only the first
+  // one; with the block first, the user's request disappeared and the agent
+  // answered the recalled background instead. The question must stay first.
   const host = await createHost({
     fetchHandler: url => (url.includes('/search') ? { body: { results: [{ memory: 'a stable fact about the project', similarity: 0.7 }] } } : { body: {} }),
   })
   try {
     const preStep = hook(host, 'agent/pre-step')
-    const stale = { role: 'user', content: [{ type: 'text', text: 'old recall' }], source: { kind: 'supermemory', form: 'recall' } }
-    const human = { role: 'user', content: [{ type: 'text', text: 'new question' }], source: { kind: 'user' } }
-    const decision = { kind: 'enter', messages: [stale, human] }
+    const human = { role: 'user', content: [{ type: 'text', text: 'please do the actual task' }], source: { kind: 'user' } }
+    const decision = { kind: 'enter', messages: [human] }
     const result = await preStep.handler(
-      { agent: { id: 'sess-2', session: { header: {} } }, messages: decision.messages, turn: 2, step: 1, signal: new AbortController().signal },
+      { agent: { id: 'sess-order', session: { header: {} } }, messages: decision.messages, turn: 1, step: 1, signal: new AbortController().signal },
       async () => decision,
     )
-    const recallMessages = result.messages.filter(message => message.source && message.source.kind === 'supermemory')
-    // A durable block from a previous turn cannot be removed from this hook; the
-    // new block is appended before the human message and nothing is dropped.
-    assert.equal(recallMessages.length, 2)
-    assert.equal(result.messages.includes(human), true)
-    assert.equal(result.messages.at(-1), human)
+    assert.equal(result.messages[0], human, 'the recall block came before the user request')
+    const recallIndex = result.messages.findIndex(message => message.source && message.source.kind === 'supermemory')
+    assert.equal(recallIndex, 1, 'the recall block is not directly after the request')
+    const text = result.messages[recallIndex].content[0].text
+    assert.match(text, /attached after the user message that states the actual request/)
   } finally {
     host.restore()
   }

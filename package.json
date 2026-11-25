@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-supermemory",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Supermemory long-term memory for DeepSeek Harness: profile-scoped own memory plus read access to other agents' Supermemory containers",
   "type": "module",
   "private": true,

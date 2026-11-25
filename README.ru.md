@@ -52,16 +52,16 @@ node scripts/setup.mjs --json          # машинный план (код 3 и 
 1. **Попросить агента** (работает сразу): сказать ему установить бандл
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.5.3
    ```
 
 2. **GUI**: *Settings → Plugins → Install from URL* с
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2`.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.5.3`.
 
 3. **CLI**, если вы используете `@deepseek-ai/dsh` из npm:
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.2"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.5.3"
    ```
 
 Бандл сам вставляет свой `cordis.patch.yml`, вручную строку писать не нужно. Обычный
