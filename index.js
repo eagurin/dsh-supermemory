@@ -65,8 +65,8 @@ const DEFAULTS = {
   profileFrequency: 20,
   profileMaxChars: 1800,
   recallMaxChars: 6000,
-  recallTimeoutMs: 2500,
-  timeoutMs: 8000,
+  recallTimeoutMs: 10000,
+  timeoutMs: 120000,
   dreaming: 'instant',
   captureDebounceMs: 1200,
   maxCaptureChars: 120000,
@@ -265,8 +265,8 @@ function resolveSettings(raw) {
   settings.profileFrequency = Math.round(num(input.profileFrequency, 20, 0, 1000))
   settings.profileMaxChars = Math.round(num(input.profileMaxChars, 1800, 0, 20000))
   settings.recallMaxChars = Math.round(num(input.recallMaxChars, 6000, 500, 40000))
-  settings.recallTimeoutMs = Math.round(num(input.recallTimeoutMs, 2500, 250, 30000))
-  settings.timeoutMs = Math.round(num(input.timeoutMs, 8000, 500, 120000))
+  settings.recallTimeoutMs = Math.round(num(input.recallTimeoutMs, 10000, 250, 60000))
+  settings.timeoutMs = Math.round(num(input.timeoutMs, 120000, 500, 300000))
   settings.dreaming = input.dreaming === 'dynamic' ? 'dynamic' : 'instant'
   settings.captureDebounceMs = Math.round(num(input.captureDebounceMs, 1200, 0, 60000))
   settings.maxCaptureChars = Math.round(num(input.maxCaptureChars, 120000, 1000, 2000000))

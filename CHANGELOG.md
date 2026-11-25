@@ -4,6 +4,27 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-11-25
+
+### Changed
+
+- **Timeouts are sized for a busy local server.** `timeoutMs` default 8000 → 120000
+  (ceiling 120000 → 300000) and `recallTimeoutMs` default 2500 → 10000 (ceiling 30000 →
+  60000). On this machine `hermes_default` holds 11 682 memories, and while the server
+  worked through an embedding backlog a single search needed more than 8 s (measured
+  outlier: 28.5 s). `supermemory_search` then failed the whole call with
+  `Supermemory request to http://127.0.0.1:6767 timed out after 8000 ms` and threw away
+  every result — ten such failures in two sessions, plus seven audit probes that hit the
+  same ceiling. Waiting for the answer is better
+  than losing the request: a slow search now returns its facts, while a genuinely dead
+  server still fails at once (`ECONNREFUSED` is reported as unreachable, not as a
+  timeout). No timeout was removed, only widened, so a hung server cannot stall a tool
+  forever.
+
+### Tests
+
+101 cases, unchanged; the defaults and both ceilings are now pinned by assertions.
+
 ## [0.6.1] — 2026-11-25
 
 ### Fixed

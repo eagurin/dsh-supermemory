@@ -10,6 +10,10 @@ test('defaults are complete and stable', () => {
   assert.equal(settings.filter, undefined)
   assert.equal(settings.rewriteQuery, false)
   assert.equal(settings.ingestWaitMs, 1500)
+  // The local server spikes past 8 s while it works through an embedding backlog
+  // (measured 28.5 s), and a single slow search used to fail the whole tool call.
+  assert.equal(settings.timeoutMs, 120000)
+  assert.equal(settings.recallTimeoutMs, 10000)
   assert.equal(Object.keys(DEFAULTS).length, CONFIG_KEYS.length)
 })
 
@@ -23,6 +27,10 @@ test('numbers are clamped into their documented range', () => {
   assert.equal(resolveSettings({ maxRecallResults: -5 }).maxRecallResults, 1)
   assert.equal(resolveSettings({ threshold: 5 }).threshold, 1)
   assert.equal(resolveSettings({ recallTimeoutMs: 1 }).recallTimeoutMs, 250)
+  assert.equal(resolveSettings({ recallTimeoutMs: 999999 }).recallTimeoutMs, 60000)
+  assert.equal(resolveSettings({ timeoutMs: 1 }).timeoutMs, 500)
+  // A busy local server may take minutes; the ceiling must not cap the fix at 8 s.
+  assert.equal(resolveSettings({ timeoutMs: 99999999 }).timeoutMs, 300000)
   assert.equal(resolveSettings({ ingestWaitMs: 999999 }).ingestWaitMs, 30000)
 })
 

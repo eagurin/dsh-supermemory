@@ -54,17 +54,17 @@ through DSH itself. Pick one:
 1. **Ask the agent** (works out of the box): tell it to install the bundle
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.6.1
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0
    ```
 
 2. **GUI**: *Plugins → Add plugin*, then paste
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.6.1` into **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0` into **Package name or address**.
 
 3. **CLI** (any machine with Node 22+ and network; the `desktop` profile must already exist, the app
    fully quit, and `pnpm` on `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.6.1"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0"
    ```
 
 The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
@@ -131,8 +131,8 @@ falls back to the default below.
 | `profileFrequency` | `20` | Inject the profile every N turns; `0` disables. |
 | `profileMaxChars` | `1800` | Character budget for the profile block. |
 | `recallMaxChars` | `6000` | Character budget for the whole recall block. |
-| `recallTimeoutMs` | `2500` | Recall budget; the turn continues without memory when it expires. |
-| `timeoutMs` | `8000` | Timeout for an ordinary API request. |
+| `recallTimeoutMs` | `10000` | Recall budget; the turn continues without memory when it expires. |
+| `timeoutMs` | `120000` | Timeout for an ordinary API request (a busy local server may need minutes). |
 | `dreaming` | `instant` | Document processing mode (`instant` or `dynamic`). |
 | `captureDebounceMs` | `1200` | Delay before writing a finished turn. |
 | `maxCaptureChars` | `120000` | Largest captured transcript body; bigger sessions are split (the stored document adds a short header). |

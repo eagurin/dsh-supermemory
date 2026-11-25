@@ -32,6 +32,8 @@ maybe('the schema fills every default', () => {
   assert.deepEqual(resolved.readContainers, [])
   assert.equal(resolved.threshold, 0.3)
   assert.equal(resolved.maxCaptureChars, 120000)
+  assert.equal(resolved.timeoutMs, 120000)
+  assert.equal(resolved.recallTimeoutMs, 10000)
 })
 
 maybe('the schema rejects a wrong type and a wrong enum value', () => {
