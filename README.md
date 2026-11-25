@@ -23,31 +23,62 @@
 
 ## Установка
 
-Нужен DSH `0.2.2` или новее и запущенный сервер Supermemory (локальный `npx supermemory local` на `:6767` либо облако
-`https://api.supermemory.ai`).
+Нужен DSH `0.2.2` или новее и сервер Supermemory — **свой локальный** (`npx supermemory local` на `:6767`) либо
+**облако** `https://api.supermemory.ai`.
+
+### Сначала выбери сервер
+
+Плагин сам сервер не выбирает за вас: у двух вариантов разные последствия, и это должно быть решением оператора.
+Скрипт настройки проверяет, поднят ли локальный сервер, и **спрашивает**, а не угадывает:
 
 ```bash
-# 1. Ключ сервера — в штатное хранилище DSH, значение в чат и в конфиг не попадает.
-#    Ссылка называется SUPERMEMORY_API_KEY (то же имя, что в официальном Hermes-плагине).
-
-# 2. Плагин как зависимость профиля: из git-тега или локальным link на время разработки.
-#    pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.1.0"
-#    pnpm add link:/Users/<you>/dev/dsh-supermemory
-
-# 3. Строка Loader'а в ~/.dsh/profiles/<profile>/cordis.patch.yml:
+node scripts/setup.mjs              # спросит: local или cloud, проверит :6767, напечатает готовую строку
+node scripts/setup.mjs --mode cloud # то же без вопросов, для агента/скрипта
+node scripts/setup.mjs --json       # машинный план: mode, baseUrl, container, warnings, row
 ```
 
-```yaml
-- id: supermemory
-  name: '@local/dsh-supermemory'
-  config:
-    baseUrl: http://localhost:6767
-    container: dsh
-    readContainers: [hermes_default]
-    readPrefixes: [hermes]
-    autoRecall: true
-    autoCapture: true
-```
+Что важно в его поведении:
+
+- локальный сервер пробуется трижды (он перезапускается по расписанию, один неудачный запрос — ещё не «выключен»);
+- если локального сервера нет, скрипт **не** молча уходит в облако: в интерактивном режиме спрашивает, в `--json`
+  возвращает `needDecision` с двумя вариантами и код возврата 3;
+- без терминала (пайп, CI) вопросы не задаются, а запрашиваются флаги — иначе процесс тихо завершился бы;
+- для облака печатает предупреждение, что транскрипты сессий уезжают с машины.
+
+| Вариант | Плюс | Минус |
+|---|---|---|
+| Локальный сервер | данные не покидают машину, тот же сервер, что у Гермеса | нужно держать процесс живым и следить за его хранилищем |
+| Облако | нечего администрировать | транскрипты сессий и вопросы уходят в Supermemory |
+
+### Дальше
+
+1. **Ключ** — в штатное хранилище DSH под ссылкой `SUPERMEMORY_API_KEY` (то же имя, что в официальном
+   Hermes-плагине). Значение в чат и в конфиг не попадает.
+2. **Плагин** — зависимость профиля из git-тега (или `link:` на время разработки):
+
+   ```bash
+   pnpm add "git+https://github.com/eagurin/dsh-supermemory.git#v0.3.0"
+   ```
+
+3. **Строка Loader'а** — вывод `node scripts/setup.mjs`. Оверрайд **заменяет конфиг целиком**, поэтому в строке
+   должны быть все ключи (скрипт печатает их все):
+
+   ```yaml
+   - id: supermemory
+     name: '@local/dsh-supermemory'
+     config:
+       baseUrl: http://127.0.0.1:6767
+       container: dsh
+       readContainers:
+         - hermes_default
+       readPrefixes:
+         - hermes
+       autoRecall: true
+       autoCapture: true
+       # … остальные ключи из вывода скрипта
+   ```
+
+4. **Перезапуск** приложения и проверка: `supermemory_namespaces`, затем `supermemory_search`.
 
 Имя пакета — `@local/dsh-supermemory` (так плагин называется с момента разработки; при переезде на установку из git
 имя сохраняется, чтобы не ломать живой профиль). Ключ API берётся из credential-ссылки `SUPERMEMORY_API_KEY` (сервис

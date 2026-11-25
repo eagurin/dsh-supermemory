@@ -4,6 +4,40 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-11-25
+
+Server choice at install time, plus the hardening pass from the public-repository
+security review.
+
+### Added
+
+- **`scripts/setup.mjs` — asks where the memory should live.** It probes the local
+  server (`/v3/health`, three attempts, because the server restarts on its own
+  schedule), asks `local` or `cloud`, and prints the complete Loader row. With no
+  local server it does **not** quietly fall back to the cloud: interactive mode
+  asks, `--json` returns `needDecision` with both options and exit code 3. Without
+  a terminal it refuses prompts and demands `--mode`, instead of exiting silently
+  with an empty promise.
+- `buildPlan()` and `reachable()` are exported and unit-tested, so the decision
+  logic is covered without a terminal or a server.
+- `SECURITY.md`: what the bundle promises (no secrets, per-request key resolution,
+  read-only Hermes namespaces, no install scripts, no telemetry) and what it does
+  not (transcripts leave the machine when the cloud server is chosen).
+
+### Changed
+
+- The setup flow is documented as step one of installation: local or cloud is an
+  operator decision with different consequences, not a default to assume.
+- `AGENTS.md` now requires asking that question before an install.
+- Machine-specific path in a test fixture replaced with a neutral one, so the
+  public repository carries no local paths.
+
+### Tests
+
+44 cases: the previous 32 plus write-isolation (`hermes*` stays read-only unless
+`allowWritesToReadContainers` is on) and setup-plan coverage. `check.mjs` also
+fails the build when a `/ns/` path is interpolated without `encodeURIComponent`.
+
 ## [0.2.0] — 2026-11-25
 
 Config schema, metadata filters, ingest status, and unit tests. Behaviour with the

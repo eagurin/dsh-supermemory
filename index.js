@@ -811,6 +811,7 @@ export const internals = {
   lastUserMessage,
   buildTranscript,
   ingestText,
+  writableContainers,
 }
 
 export function apply(ctx, raw) {

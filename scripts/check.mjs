@@ -81,6 +81,14 @@ assert(/export const inject = \[[^\]]*'credentials'/.test(entry), "index.js must
 assert(/export function apply\(ctx, raw\)/.test(entry), 'index.js must export apply(ctx, raw)')
 assert(/export const Config/.test(entry), 'index.js must export the Config schema for the Settings page')
 assert(/export const internals/.test(entry), 'index.js must export internals so the unit tests can reach the pure helpers')
+assert(existsSync(join(root, 'scripts/setup.mjs')), 'missing file: scripts/setup.mjs (self-hosted or cloud setup)')
+assert(existsSync(join(root, 'SECURITY.md')), 'missing file: SECURITY.md')
+// No namespace may be interpolated into a URL without encoding: a name is
+// operator input, and an unencoded one could retarget the request.
+assert(
+  !/\/ns\/\$\{(?!encodeURIComponent)/.test(entry),
+  'every /ns/ path must encode the namespace with encodeURIComponent',
+)
 assert(existsSync(join(root, 'test')), 'missing file: test/ (unit tests)')
 assert(typeof manifest?.scripts?.test === 'string', 'declare scripts.test so CI runs the unit tests')
 assert(manifest?.dependencies?.['@deepseek-ai/schemastery'] !== undefined, 'declare @deepseek-ai/schemastery so a git install resolves the Config schema')
@@ -131,6 +139,7 @@ assert(icon.trimStart().startsWith('<svg'), 'icon.svg must be an SVG document')
 
 // ------------------------------------------------------------------ docs ----
 const readme = readText('README.md')
+assert(readme.includes('scripts/setup.mjs'), 'README does not explain the setup script')
 for (const tool of [
   'supermemory_search',
   'supermemory_profile',
@@ -142,7 +151,7 @@ for (const tool of [
 ]) {
   assert(readme.includes(tool), `README does not mention the ${tool} tool`)
 }
-for (const doc of ['CHANGELOG.md', 'docs/DETAIL.md', 'AGENTS.md']) {
+for (const doc of ['CHANGELOG.md', 'docs/DETAIL.md', 'AGENTS.md', 'SECURITY.md']) {
   assert(existsSync(join(root, doc)), `missing file: ${doc}`)
 }
 

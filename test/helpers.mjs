@@ -1,6 +1,6 @@
 import { internals } from '../index.js'
 
-export const { resolveSettings, normalizeFilter, sanitizeContainer, isHermesContainer, containerLabel, mergeFacts, resultText, profileFacts, clampLines, messageText, lastUserMessage, buildTranscript, ingestText, DEFAULTS, CONFIG_KEYS } = internals
+export const { resolveSettings, normalizeFilter, sanitizeContainer, isHermesContainer, containerLabel, mergeFacts, resultText, profileFacts, clampLines, messageText, lastUserMessage, buildTranscript, ingestText, writableContainers, DEFAULTS, CONFIG_KEYS } = internals
 
 /** A message as the session stores it. */
 export function userMessage(text, kind = 'user') {

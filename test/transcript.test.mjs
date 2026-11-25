@@ -8,11 +8,11 @@ test('the transcript keeps human turns and assistant answers only', () => {
     userMessage('Привет, запомни это'),
     assistantMessage('Запомнил.'),
     userMessage('recall block', 'supermemory'),
-  ], { cwd: '/Users/laptop/dev' })
+  ], { cwd: '/workspace/demo' })
   const { content, turns } = buildTranscript(session, resolveSettings({ minCaptureChars: 10 }))
   assert.equal(turns, 1)
   assert.match(content, /# DeepSeek Harness conversation session-test/)
-  assert.match(content, /- workspace: \/Users\/laptop\/dev/)
+  assert.match(content, /- workspace: \/workspace\/demo/)
   assert.match(content, /\*\*User:\*\* Привет, запомни это/)
   assert.match(content, /\*\*Assistant:\*\* Запомнил\./)
   assert.doesNotMatch(content, /recall block/)
