@@ -748,7 +748,7 @@ function ingestText(status) {
  * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
  * @returns {Promise<string[]>} readable container names, own container excluded.
  */
-function makeContainerResolver(ctx, settings) {
+function makeContainerResolver(ctx, settings, log) {
   let cache = { at: 0, names: [], complete: true }
   return async function readableContainers(deadline) {
     const now = Date.now()
@@ -769,7 +769,9 @@ function makeContainerResolver(ctx, settings) {
         // A failed discovery must not be cached: caching it silently dropped whole
         // namespaces from search and recall for the next minute.
         complete = false
-        log('warn', `namespace discovery failed, using configured containers only: ${error instanceof Error ? error.message : String(error)}`)
+        if (typeof log === 'function') {
+          log('warn', `namespace discovery failed, using configured containers only: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
     }
     names.delete(settings.container)
@@ -1467,7 +1469,6 @@ export const internals = {
 
 export function apply(ctx, raw) {
   const settings = resolveSettings(raw)
-  const readableContainers = makeContainerResolver(ctx, settings)
   const log = (level, message) => {
     try {
       const logger = ctx.logger
@@ -1477,6 +1478,7 @@ export function apply(ctx, raw) {
       // Logging must never break a turn.
     }
   }
+  const readableContainers = makeContainerResolver(ctx, settings, log)
 
   /** Turn already recalled, per session, to avoid duplicate injections on retries. */
   const recalledTurns = new Map()

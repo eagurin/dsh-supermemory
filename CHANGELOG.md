@@ -4,6 +4,21 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-11-25
+
+### Fixed
+
+- **A failed namespace discovery crashed every tool that resolves a container.** The
+  resolver was moved to accept a logger, but its `log` call referenced a binding that
+  lives inside `apply`, so a discovery error (a busy server, a timeout) threw
+  `ReferenceError: log is not defined` instead of degrading to the configured
+  containers. The logger is now injected and optional, and a regression test covers a
+  failing discovery.
+
+### Tests
+
+100 → 101 cases.
+
 ## [0.6.0] — 2026-11-25
 
 Five independent live audits (real server, real hooks, clean-room install, edge-case

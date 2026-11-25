@@ -341,3 +341,23 @@ test('search reports a memory id only for real memories, never for chunks', () =
   assert.equal(facts.find(fact => fact.text.startsWith('a real')).memoryId, 'mem-1')
   assert.equal(facts.find(fact => fact.text.startsWith('a chunk')).memoryId, undefined)
 })
+
+test('a failed namespace discovery degrades instead of breaking a tool call', async () => {
+  // The resolver used to reference `log` from outside its scope, so a discovery
+  // failure threw ReferenceError and every tool that resolves a container failed.
+  const host = await createHost({
+    config: { readPrefixes: ['hermes'] },
+    fetchHandler: url => {
+      if (url.includes('/ns?limit=')) return { status: 500, body: { error: 'boom' } }
+      if (url.includes('/list/')) return { body: { documents: [{ id: 'doc-1', title: 'one' }] } }
+      return { body: {} }
+    },
+  })
+  try {
+    const tool = host.tools.get('supermemory_list')
+    const result = await tool.execute({ type: 'documents' }, { signal: new AbortController().signal })
+    assert.match(result.text, /doc-1/)
+  } finally {
+    host.restore()
+  }
+})

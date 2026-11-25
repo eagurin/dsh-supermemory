@@ -54,17 +54,17 @@ through DSH itself. Pick one:
 1. **Ask the agent** (works out of the box): tell it to install the bundle
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.6.0
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.6.1
    ```
 
 2. **GUI**: *Plugins → Add plugin*, then paste
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.6.0` into **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.6.1` into **Package name or address**.
 
 3. **CLI** (any machine with Node 22+ and network; the `desktop` profile must already exist, the app
    fully quit, and `pnpm` on `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.6.0"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.6.1"
    ```
 
 The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
