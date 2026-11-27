@@ -66,11 +66,24 @@ async function raw(method, path, body) {
 
 before(async () => {
   if (!LIVE) return
-  // A pre-existing namespace is not this suite's to write into or delete.
+  // A pre-existing namespace is not this suite's to write into or delete. The
+  // inventory pages: checking only the first page would miss a match beyond it and
+  // then delete that namespace in cleanup.
   try {
-    const existing = await raw('GET', '/ns?limit=100')
-    const names = (existing.namespaces || []).map(entry => entry.namespace)
-    suiteSafe = !names.includes(container)
+    suiteSafe = true
+    const seen = new Set()
+    for (let page = 1; page <= 50; page += 1) {
+      const chunk = await raw('GET', `/ns?limit=100&page=${page}`)
+      const names = (chunk.namespaces || []).map(entry => entry.namespace)
+      if (names.includes(container)) {
+        suiteSafe = false
+        break
+      }
+      if (names.length === 0 || seen.has(names[0])) break
+      seen.add(names[0])
+      const totalPages = chunk.pagination && Number.isFinite(chunk.pagination.totalPages) ? chunk.pagination.totalPages : 1
+      if (page >= totalPages) break
+    }
   } catch {
     suiteSafe = false
   }

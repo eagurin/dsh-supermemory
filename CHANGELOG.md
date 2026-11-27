@@ -87,10 +87,11 @@ actions, upload policy) are unchanged and still tested.
 - Filter and group validation keeps rejecting bad shapes before any request and now never
   echoes the rejected field, operator, key, or JSON input (the JSON parser's own message
   could quote the input, so it is no longer included).
-- **Server error bodies are redacted and neutralized** before they become a tool error:
-  credential shapes are replaced, the text is reduced to one line, and arbitrary `details`
-  are dropped (300-character cap). A hostile endpoint can still write instruction text into
-  an error — tool errors stay untrusted — but it cannot make the plugin echo the key shape.
+- **Server error bodies are never relayed** into a tool error: the error names the endpoint,
+  the HTTP status, a stable identifier-shaped `code` when the server sends one, and a fixed
+  hint for common statuses. An endpoint that echoes the `Authorization` header or writes
+  instructions therefore cannot put either into the model context, and semantic-forget refusals
+  render only ids and safe codes, never refusal text.
 - **`supermemory_read_document` sanitizes its header and frames the document body** in its
   own nonce-delimited region with a warning line; the body stays exact for quotations.
 - **Capture only retires documents it can prove it wrote.** Before deleting a legacy single
@@ -128,7 +129,7 @@ actions, upload policy) are unchanged and still tested.
 
 ### Tests
 
-- 101 → 158 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
+- 101 → 160 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
   `test/recall.test.mjs`, `test/write-path.test.mjs`,
   `test/profile-list-namespace.test.mjs`, plus an opt-in `test/live.test.mjs` that writes
   only into a `dsh-audit-<YYYYMMDD-HHMM>` namespace, reads real memories from `dsh` to

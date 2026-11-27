@@ -18,12 +18,12 @@ Does:
   credential reference (`SUPERMEMORY_API_KEY`); the value lives in the Host
   credential store (`$DSH_HOME/.credentials.yaml`) and is resolved per request.
 - **The key never appears in logs or errors.** The plugin never interpolates it; errors
-  name the reference and the endpoint. Server-provided error text is redacted (credential
-  shapes become `[redacted]`), neutralized to one line without control characters or block
-  shapes, and capped at 300 characters; arbitrary `details` are not relayed. A hostile
-  proxy can still put instruction text into an error, so tool errors remain untrusted data,
-  but it cannot make the plugin print the credential back in a recognizable form. The key
-  is never sent anywhere except as the `Authorization` header to `baseUrl`.
+  name the reference and the endpoint. A failed request reports the endpoint, the HTTP
+  status, and — only when the server sends an identifier-shaped `code` — that code, plus a
+  fixed hint for common statuses. **Server error bodies are never relayed**, so an endpoint
+  that echoes the `Authorization` header or writes instructions cannot put either into the
+  model context. The key is never sent anywhere except as the `Authorization` header to
+  `baseUrl`.
 - **Agent isolation by default.** The plugin writes only to its own namespace.
   Another agent's namespaces are readable only when explicitly listed in
   `readContainers` or matched by `readPrefixes` (both empty by default), `writeContainers`

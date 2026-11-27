@@ -223,9 +223,10 @@ supermemory_buckets → action: set, buckets: {"decisions": "Decisions the opera
 What the plugin guarantees:
 
 - **No secrets in this repository**, and the API key never appears in logs, errors, or tool output
-  (tool results do return stored memory text; server error text is redacted, neutralized to one
-  line, and capped at 300 characters, and a hostile body's `details` are not relayed). The key is
-  resolved per request from the credential store.
+  (tool results do return stored memory text, but server error *bodies* are never relayed: an error
+  names the endpoint, the HTTP status, and a stable machine code, with a fixed hint for common
+  statuses, so an endpoint that echoes the key or writes instructions cannot put either into the
+  model context). The key is resolved per request from the credential store.
 - **Writes stay inside your namespaces.** `writeContainers` cannot name a Hermes namespace, and
   `allowWritesToReadContainers` never extends to one. Namespace deletion is an allowlist: only a
   namespace this agent may write can be deleted, never its own, and there is no `moveTo`.
@@ -263,7 +264,7 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-node --test test/           # 158 cases (5 live cases skip without a temporary namespace);
+node --test test/           # 160 cases (5 live cases skip without a temporary namespace);
                             # without the line above, 3 Config tests skip
 ```
 

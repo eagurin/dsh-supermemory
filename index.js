@@ -660,8 +660,8 @@ async function api(ctx, settings, path, options = {}) {
       }
     }
     if (!response.ok) {
-      const detail = describeApiError(data, raw)
-      const error = new Error(`Supermemory ${method} ${path} failed with ${response.status}${detail ? `: ${detail}` : ''}`)
+      const code = safeErrorCode(data)
+      const error = new Error(`Supermemory ${method} ${path} failed with ${response.status}${code ? ` (${code})` : ''}: ${statusHint(response.status)}`)
       error.status = response.status
       throw error
     }
@@ -682,28 +682,44 @@ async function api(ctx, settings, path, options = {}) {
 }
 
 /**
- * Render an API error body without losing structure or printing `[object Object]`.
- * @param {any} data - parsed body.
- * @param {string} raw - raw body text.
- * @returns {string} a short human description.
+ * Fixed wording for one HTTP status. The server's own error text is never relayed:
+ * a configured endpoint can echo the Authorization header or write instructions,
+ * and tool errors reach the model context.
+ * @param {number} status - HTTP status code.
+ * @returns {string} a short hint.
  */
-function describeApiError(data, raw) {
-  const parts = []
-  if (typeof data === 'string') parts.push(data)
-  else if (data && typeof data === 'object') {
-    if (data.error !== undefined) {
-      if (Array.isArray(data.error)) parts.push(data.error.map(entry => (entry && entry.message) || '').filter(Boolean).join('; '))
-      else if (typeof data.error === 'string') parts.push(data.error)
-      else if (data.error && typeof data.error.message === 'string') parts.push(data.error.message)
-    }
-    if (typeof data.message === 'string' && !parts.includes(data.message)) parts.push(data.message)
-  } else if (data === null || data === undefined) {
-    parts.push(String(raw || ''))
+function statusHint(status) {
+  if (status >= 500) return 'server error'
+  const hints = {
+    400: 'the request was rejected',
+    401: 'the API key was rejected',
+    402: 'the server reported insufficient processing credits',
+    403: 'the namespace is not accessible with this key',
+    404: 'not found',
+    409: 'conflict with the current state',
+    413: 'the payload is too large',
+    422: 'the request did not validate',
+    429: 'rate limited',
   }
-  // The body is server-controlled: a proxy that echoes the Authorization header or
-  // writes instructions must not put either into the model context verbatim.
-  const detail = sanitizeUntrusted(redactSecrets(parts.join(': '), true), { singleLine: true })
-  return detail.slice(0, 300)
+  return hints[status] || 'unexpected status'
+}
+
+/**
+ * A short machine code from an error body, when it looks like an identifier.
+ * @param {any} data - parsed error body.
+ * @returns {string} a safe code such as `api_key_expired`, or an empty string.
+ */
+function safeErrorCode(data) {
+  if (!data || typeof data !== 'object') return ''
+  const candidates = [
+    data.code,
+    data.error_code,
+    data.error && !Array.isArray(data.error) && typeof data.error === 'object' ? data.error.code : undefined,
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && /^[A-Za-z0-9_.-]{1,40}$/.test(candidate)) return candidate
+  }
+  return ''
 }
 
 /**
@@ -1682,8 +1698,8 @@ async function apiMultipart(ctx, settings, path, form, signal) {
       }
     }
     if (!response.ok) {
-      const detail = describeApiError(data, raw)
-      const error = new Error(`Supermemory POST ${path} failed with ${response.status}${detail ? `: ${detail}` : ''}`)
+      const code = safeErrorCode(data)
+      const error = new Error(`Supermemory POST ${path} failed with ${response.status}${code ? ` (${code})` : ''}: ${statusHint(response.status)}`)
       error.status = response.status
       throw error
     }
@@ -1854,6 +1870,8 @@ export const internals = {
   sanitizeShort,
   classifyRecallFailure,
   recallNotice,
+  statusHint,
+  safeErrorCode,
   normalizeGroup,
   contextGroup,
   normalizeRelations,
@@ -2601,8 +2619,8 @@ export function apply(ctx, raw) {
         })
         const count = typeof data?.count === 'number' ? data.count : 0
         if (count === 0) {
-          const detail = Array.isArray(data && data.errors) && data.errors.length > 0 ? `: ${JSON.stringify(data.errors[0]).slice(0, 200)}` : ''
-          throw new Error(`memory ${ids[0]} was not deleted${detail}`)
+          const refusals = Array.isArray(data && data.errors) ? data.errors.length : 0
+          throw new Error(`memory ${sanitizeShort(ids[0], 120)} was not deleted${refusals > 0 ? ` (the server reported ${refusals} refusal(s))` : ''}`)
         }
         return { container, text: `Forgotten memory ${ids[0]} in \`${container}\`; the server keeps an audit copy but stops recalling it.` }
       }
@@ -2629,7 +2647,17 @@ export function apply(ctx, raw) {
         const text = typeof match === 'string' ? match : (match.memory || match.chunk || '')
         if (text) lines.push(`- ${sanitizeUntrusted(text, { singleLine: true }).slice(0, 300)}`)
       }
-      for (const error of errors.slice(0, 5)) lines.push(`- error: ${typeof error === 'string' ? error : JSON.stringify(error).slice(0, 200)}`)
+      for (const error of errors.slice(0, 5)) {
+        // Refusals are server-controlled: show which id was refused and a safe code,
+        // never the free-text message.
+        if (typeof error === 'string') {
+          lines.push(`- refused: ${sanitizeShort(error, 120)}`)
+          continue
+        }
+        const id = error && typeof error.id === 'string' ? sanitizeShort(error.id, 120) : '(unknown id)'
+        const code = safeErrorCode(error)
+        lines.push(`- refused: ${id}${code ? ` (${code})` : ''}`)
+      }
       return { container, text: lines.join('\n') }
     },
   })
