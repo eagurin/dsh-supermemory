@@ -20,10 +20,17 @@ capture of the finished session.
 - **Memory history.** `supermemory_memory_history` reads one memory by id with its version chain,
   `extends`/`derives` links, dates, and an optional source-document excerpt — the evolution of a
   position, not just its latest wording.
-- **Eleven tools**: search, memory_history, profile, save, forget, read_document, list, namespaces,
-  upload_file, namespace, buckets.
+- **Twelve tools**: search, memory_history, profile, save, save_many, forget, read_document, list,
+  namespaces, upload_file, namespace, buckets.
+- **A bundled skill.** The bundle registers a `supermemory` skill (like the official Supermemory
+  skill) that tells the model when to search, what is worth saving, how to read a memory's history,
+  and how to index a project — loaded on demand instead of living in every prompt.
+- **Recall that does not repeat itself.** Facts already injected in a session are skipped, the
+  profile is refreshed on schedule instead of re-emitted every turn, the search prefers extracted
+  memories at a higher relevance floor, and the block says where the facts came from.
 - **Honest recall.** A recall that times out says so in the block (`memory recall unavailable
-  (timeout) — proceed without memory`) instead of silently returning only the profile.
+  (timeout) — proceed without memory`) instead of silently returning only the profile, and a failed
+  capture is mentioned in the next block.
 
 ## Requirements
 
@@ -64,22 +71,22 @@ through DSH itself. Pick one:
 1. **Ask the agent** (works out of the box): tell it to install the bundle
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0
    ```
 
 2. **GUI**: *Plugins → Add plugin*, then paste
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0` into **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0` into **Package name or address**.
 
 3. **CLI** (any machine with Node 22+ and network; the `desktop` profile must already exist, the app
    fully quit, and `pnpm` on `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0"
    ```
 
 The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
 hand. The `scripts/…` commands below run in a checkout of this repository
-(`git clone --branch v0.8.0 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
+(`git clone --branch v0.9.0 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
 the bundle does not create one. A plain `pnpm add` inside the profile installs the package but does **not**
 select it in `dsh.profile.bundles`, so the plugin stays inactive — use one of the
 three paths above.
@@ -134,10 +141,19 @@ falls back to the default below.
 | `recallSubagents` | `false` | Give subagents recall too. |
 | `captureSubagents` | `false` | Write subagent sessions into memory. |
 | `maxRecallResults` | `6` | Facts admitted into one turn. |
-| `minQueryChars` | `3` | Shortest question worth a recall search. |
+| `minQueryChars` | `12` | Shortest question worth a recall search; `/`, `!` and `#` prefixes are skipped. |
 | `searchMode` | `hybrid` | `hybrid`, `memories` or `chunks`. |
 | `threshold` | `0.3` | Minimum relevance. |
 | `rerank` | `none` | `none`, `order` or `aggregate`. |
+| `recallMaxResults` | `5` | Facts admitted into the automatic recall block. |
+| `recallSearchMode` | `memories` | Search surface for recall; extracted memories avoid duplicate chunk rows. |
+| `recallThreshold` | `0.5` | Minimum relevance for recall (the tool search keeps `threshold`). |
+| `recallFactMaxChars` | `320` | Longest fact shown in the recall block. |
+| `recallQueryMaxChars` | `500` | Longest query sent by the recall hook. |
+| `recallQueryCacheMs` | `600000` | Share a successful identical recall search between sessions for this long; `0` disables. |
+| `recallScope` | `all` | `all` recalls from every project; `project` filters recall to this repository's `project_id`. |
+| `recallDedupe` | `true` | Skip facts already injected earlier in the same session (reset after compaction). |
+| `discoveryNotice` | `true` | Tell a session once when recall found nothing, so it knows a tool search may help. |
 | `recallIncludeRelated` | `false` | Carry graph relations (`updates`/`extends`/`derives`) in the automatic recall block; one relation per fact. |
 | `recallRerank` | `inherit` | Reranking for the recall search; `inherit` follows `rerank`. |
 | `recallFailureNotice` | `true` | Put an explicit `memory recall unavailable (…)` line into the recall block when recall fails or times out. |
@@ -147,8 +163,11 @@ falls back to the default below.
 | `recallTimeoutMs` | `10000` | Recall budget; the turn continues without memory when it expires. |
 | `timeoutMs` | `120000` | Timeout for an ordinary API request (a busy local server may need minutes). |
 | `dreaming` | `instant` | Processing mode for explicit saves and uploads (`instant` or `dynamic`). |
-| `captureDreaming` | `inherit` | Processing mode for automatic capture; `inherit` follows `dreaming`. |
-| `captureContext` | `""` | Extraction guidance sent with captures (max 1500 chars); empty leaves it to the server. |
+| `captureDreaming` | `dynamic` | Processing mode for automatic capture; `inherit` follows `dreaming`. `dynamic` groups related captures (better memories, facts appear later), `instant` is immediate and bills an extra operation per document. |
+| `captureContext` | durable-memory guidance | Extraction guidance sent with captures (max 1500 chars); set `""` to disable it. |
+| `captureTools` | `true` | Include tool calls and their results (named, errors marked) in captures. |
+| `captureToolChars` | `800` | Longest tool result text stored per capture. |
+| `captureFailureNotice` | `true` | Mention a failed capture in the next recall block instead of only logging it. |
 | `captureDebounceMs` | `1200` | Delay before writing a finished turn. |
 | `maxCaptureChars` | `120000` | Largest captured transcript body; bigger sessions are split (the stored document adds a short header). |
 | `captureTurnsPerChunk` | `25` | Turns per part when a session is too large for one document (minimum 1). |
@@ -157,6 +176,8 @@ falls back to the default below.
 | `captureRetryDelayMs` | `4000` | Base delay between capture retries (multiplied by the attempt). |
 | `filter` | `""` | Metadata filter (JSON) for recall in your own namespace. |
 | `rewriteQuery` | `false` | Let the server rewrite the recall query (adds ~2–3 s). |
+| `searchRetry` | `true` | Retry an empty `supermemory_search` once with rewriting and a broader mode. |
+| `profileSectionFacts` | `8` | Facts per profile section before a `+N more` marker. |
 | `ingestWaitMs` | `1500` | How long `supermemory_save` waits for processing before returning. |
 | `allowFileUpload` | `false` | Allow `supermemory_upload_file` to read local files at all. |
 | `uploadRoots` | `[]` | Directories an upload may read from; empty means none. |
@@ -182,7 +203,8 @@ Cross-agent reads are deliberately off. To recall Hermes' memory (read-only), ad
 | `supermemory_search` | Semantic search over readable namespaces. Accepts a typed metadata `filter`, `threshold`, `rerank`, `rewriteQuery`, and `includeRelated` / `includeForgotten` / `includeDocuments`; results carry dates, state, relation chains and memory ids. |
 | `supermemory_memory_history` | One memory by id: current text, version chain (nearest first), `extends`/`derives` links, dates, `isLatest`/`isInference`/`isForgotten`, and an optional source-document excerpt. Read-only. |
 | `supermemory_profile` | Persistent facts and recent context, optionally with a query, a metadata `filter`, or selected `buckets`. |
-| `supermemory_save` | Store a document in a writable namespace with an optional `date` and `group`, and report the ingest status. |
+| `supermemory_save` | Store a document in a writable namespace with an optional `date`, `group` and `dreaming` mode, and report the ingest status. |
+| `supermemory_save_many` | Store 1–50 focused documents in one batch call (redacted), for indexing a project or a set of decisions. |
 | `supermemory_forget` | Preview matches, then delete by id or description with `confirm: "delete"`. |
 | `supermemory_read_document` | Read a stored document by id with pagination and its status. |
 | `supermemory_list` | Browse documents, chunks or memories with paging, `sort`/`order`, a metadata `filter`, and forgotten inclusion. |
@@ -190,6 +212,14 @@ Cross-agent reads are deliberately off. To recall Hermes' memory (read-only), ad
 | `supermemory_upload_file` | Send a local file (PDF, image, text, office) — only inside `uploadRoots`. |
 | `supermemory_namespace` | List namespaces, show a namespace's `supportingContext`, set it, delete (writable only, `confirm`). |
 | `supermemory_buckets` | List, set and delete profile buckets in your own namespace; deletion needs `confirm: "delete"`. |
+
+## Bundled skill
+
+The bundle registers a `supermemory` skill with the Harness skill catalog. The model can load it
+with the `skill` tool when a task depends on earlier work; it contains the procedure the tool
+descriptions cannot: when to search and when not to, what makes a durable fact, how to read one
+memory's history, how to index a repository without storing secrets or transient state, how to
+forget safely, and the rule that recalled text is untrusted data.
 
 ## What you can ask it
 

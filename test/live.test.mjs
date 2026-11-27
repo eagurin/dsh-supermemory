@@ -179,6 +179,25 @@ maybe('live: a dated, grouped document is accepted and then listed', async (t) =
   t.diagnostic(`stored ${documentId} with status ${stored.system && stored.system.status}`)
 })
 
+maybe('live: a batch of focused documents is stored and listed', async (t) => {
+  const batch = host.tools.get('supermemory_save_many')
+  const stamp = Date.now()
+  const result = await batch.execute({
+    documents: [
+      { content: 'Architecture: the audit fixture is a small single-service API.', documentId: `audit-batch-a-${stamp}`, group: { project: 'audit-project', kind: 'architecture' }, date: '2026-11-20' },
+      { content: 'Convention: the audit fixture uses UTC timestamps everywhere.', documentId: `audit-batch-b-${stamp}`, group: { project: 'audit-project', kind: 'conventions' }, date: '2026-11-20' },
+    ],
+    dreaming: 'instant',
+  }, { signal: new AbortController().signal })
+  assert.equal(result.count, 2, `the batch accepted ${result.count} of 2 documents: ${result.text}`)
+  assert.equal(result.failed, 0)
+  const list = host.tools.get('supermemory_list')
+  const listed = await list.execute({ type: 'documents', limit: 20 }, { signal: new AbortController().signal })
+  assert.match(listed.text, new RegExp(`audit-batch-a-${stamp}`))
+  assert.match(listed.text, new RegExp(`audit-batch-b-${stamp}`))
+  t.diagnostic(`batch stored 2 documents and both are listed`)
+})
+
 maybe('live: search accepts the v5 include flags and renders dates', async (t) => {
   const search = host.tools.get('supermemory_search')
   const result = await search.execute({

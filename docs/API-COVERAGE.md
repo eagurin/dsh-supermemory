@@ -4,6 +4,9 @@ What this bundle uses of the Supermemory v5 namespace API, what it deliberately 
 not use, and where each item is tested. The point of the matrix is to answer "does the
 plugin use the API's real potential" without claiming features the API does not have.
 
+The bundle also registers a `supermemory` skill (the procedural half of memory use) and the
+automatic recall/capture hooks; this matrix covers the API paths behind the tools.
+
 ## Authority order
 
 1. **The local server's `openapi.json`** — the contract this bundle is written against.
@@ -39,7 +42,7 @@ deliberate argument or field omission; **not used** — explained, with the reas
 | # | Path | Operations | Plugin surface | Status | Test |
 |---|---|---|---|---|---|
 | 1 | `/ns/{ns}/document` | `POST`, `DELETE` | `supermemory_save`; auto-capture; document retirement | used | `write-path`, `integration`, `regressions` |
-| 2 | `/ns/{ns}/document/batch` | `POST` | — | **not used**: bulk ingestion of up to 600 arbitrary documents is a knowledge-base import, not agent memory; capture writes one upserted document per session part, and a partial-failure batch would be harder to reconcile than the per-document writes already used. | — |
+| 2 | `/ns/{ns}/document/batch` | `POST` | `supermemory_save_many` (1–50 focused documents per call, redacted, per-item statuses) | used | `tools-official` |
 | 3 | `/ns/{ns}/document/{id}` | `GET`, `PATCH` | `supermemory_read_document`; capture status polling; upsert `PATCH` | used | `history`, `write-path`, `integration` |
 | 4 | `/ns/{ns}/document/file` | `POST` | `supermemory_upload_file` | used | `security` (upload policy), `integration` |
 | 5 | `/ns/{ns}/document/file/{id}` | `POST`, `PATCH` | — | **not used**: replacing a file in place would rewrite the source document's content while keeping its id, destroying the very history this release makes readable; no tool needs it. | — |
@@ -55,10 +58,9 @@ deliberate argument or field omission; **not used** — explained, with the reas
 | 15 | `/ns/{ns}` | `GET`, `PATCH`, `DELETE` | `supermemory_namespace` actions `show`, `context`, `delete` | used (`moveTo` deliberately omitted) | `security`, `profile-list-namespace` |
 | 16 | `/organization` | `GET`, `PATCH` | — | **not used by design**: organization-wide context steers memory formation in *every* namespace, including another agent's. Writing it from an agent plugin would silently change how Hermes' memory is extracted; the plugin's contract is per-namespace. | — |
 
-So: 12 of 16 paths have a direct plugin surface, 1 (`/namespaces`) is covered by its
-equivalent route `/ns`, and 3 are deliberately out of scope for stated reasons:
-`document/batch`, `document/file/{id}` and `organization` are the only paths with no
-plugin surface.
+So: 13 of 16 paths have a direct plugin surface, 1 (`/namespaces`) is covered by its
+equivalent route `/ns`, and 2 are deliberately out of scope for stated reasons:
+`document/file/{id}` and `organization` are the only paths with no plugin surface.
 
 ## Search: every documented parameter
 
@@ -95,7 +97,11 @@ plugin surface.
 
 Document write `DELETE` (`ids`, 1–100 per call) backs the capture retirement logic and
 is covered by `regressions` (a refused deletion is retried, a shrinking surface never
-deletes).
+deletes). The batch endpoint takes the same per-document fields (`content`, `id`,
+`supportingContext`, `metadata`, `group`, `date`) plus `taskType`/`dreaming`; the plugin
+sends up to 50 focused documents per call, redacts every content first, and reports the
+accepted count and per-id failures (the API allows 600 per call; 50 keeps one tool result
+readable and limits the blast radius of a bad batch).
 
 ## Reading one memory: every documented parameter
 
@@ -162,4 +168,7 @@ not applied automatically.
 | Profile, list, namespaces, namespace show | `test/profile-list-namespace.test.mjs` |
 | Security invariants, redaction, upload policy, sanitizer, error relay, capture ownership | `test/security.test.mjs` |
 | Capture chunking and regressions | `test/chunks.test.mjs`, `test/regressions.test.mjs` |
+| Capture tool calls, privacy, project identity, extended redaction | `test/capture-official.test.mjs` |
+| Recall dedupe, profile sections, discovery hint, query cache, project scope | `test/recall-official.test.mjs` |
+| Search retry, batch save, forget by ids, pagination, skill | `test/tools-official.test.mjs` |
 | Real server (opt-in, temporary namespace) | `test/live.test.mjs` |

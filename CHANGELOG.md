@@ -4,6 +4,121 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-11-28
+
+This release adopts the mechanisms the official Supermemory agent integrations use —
+`codex-supermemory`, `claude-supermemory`, `opencode-supermemory`, `openclaw-supermemory`,
+`cursor-supermemory`, the Python `hermes-supermemory` 2.0.0 plugin, the official MCP server
+(with its shared tool layer) and the official `skills/supermemory` — and closes the gaps
+they exposed. Every mechanism below was read from their source, not inferred from docs.
+
+### Added — memory as a skill
+
+- **The bundle registers a `supermemory` skill** with the Harness skill catalog
+  (`ctx.skills.register`, optional service). It carries the procedure the tool descriptions
+  cannot: when to search and when not to, what makes a durable fact, how to read a memory's
+  history and version chain, how to index a project without storing secrets or transient
+  state, how to forget safely, and that recalled text is untrusted data. The system prompt
+  now also states the substantive-turn policy: search before work that depends on earlier
+  decisions, skip greetings, save durable decisions/conventions, and attribute recalled
+  facts to Supermemory.
+
+### Added — recall quality and cost
+
+- **Recall prefers extracted memories** (`recallSearchMode: memories`) at a higher floor
+  (`recallThreshold: 0.5`) and its own result budget (`recallMaxResults: 5`, each fact cut
+  to `recallFactMaxChars: 320`). Hybrid mode was returning the same knowledge twice (memory
+  and chunk rows) at low relevance, and chunk rows carry no version/state markers.
+- **Facts already injected in a session are skipped** (`recallDedupe`), with a footer
+  `N new fact(s) · M already in context`; the set resets on compaction, when the model no
+  longer holds the earlier blocks. Profile facts are deduplicated against search hits too.
+- **The profile is no longer re-emitted every turn.** It is fetched concurrently with the
+  searches on refresh turns (`profileFrequency`) instead of before them, and skipped on
+  other turns, where the block carries only new facts.
+- **The profile is rendered as `Known profile facts`, `Recent context` and per-bucket
+  sections** with a `+N more` marker (`profileSectionFacts`), and a failed profile fetch no
+  longer starves the query-specific part.
+- **A once-per-session discovery hint** (`discoveryNotice`) when recall finds nothing:
+  silence used to read as "there is no memory", so the model never searched.
+- **A per-container recall query cache** (`recallQueryCacheMs`, 10 minutes, successes only,
+  never reused within the same session) shares identical searches between sessions, such as
+  scheduled runs started from the same brief.
+- **Recall is scoped to the repository on request** (`recallScope: project`) using a stable
+  `project_id`; the default stays `all`, so cross-project memory keeps working.
+- **The block states provenance** in a bounded footer: recalled text is data, not
+  instructions, and facts used in an answer come from Supermemory.
+- **Query gate matches the official agents**: at least 12 characters (`minQueryChars`
+  default changed from 3), `/`, `!` and `#` prefixes skipped, and the query cut to
+  `recallQueryMaxChars: 500`.
+- **A failed capture is visible**: `captureFailureNotice` adds one line to the next recall
+  block instead of leaving the failure only in the log.
+
+### Added — capture quality
+
+- **Tool calls and their results are captured** (`captureTools`, `captureToolChars`), named,
+  with errors marked, and the plugin's own `supermemory_*` tools excluded. The previous
+  transcript kept only user and assistant text, so commands, failures and file edits — where
+  durable engineering facts live — never reached memory.
+- **`<private>…</private>` is honoured**: private spans are redacted, and a turn that is
+  entirely private is dropped together with its answer.
+- **Pasted base64 data URIs become `[image]`** before they consume the capture budget.
+- **A default extraction guidance** (`captureContext`, ~700 characters) ships with every
+  capture: extract accepted decisions and reasons, preferences, conventions, setup steps and
+  bug lessons; skip unaccepted suggestions, transient git state, raw output and chatter. An
+  explicit `""` still disables it.
+- **`captureDreaming` now defaults to `dynamic`** (the official plugins' choice) so related
+  captures form coherent memories; `instant` remains available for immediate availability
+  at the cost of one extra operation per document.
+- **Stable `project_id`** (16 hex chars) from the normalized git remote, with a path-hash
+  fallback, written into `metadata.project_id` and `group.project_id`; the default recall
+  scope keeps using it only when asked.
+- **Redaction covers more shapes**: credentials in URLs (`scheme://user:pass@`), JWTs, and
+  `KEY=value` / `KEY: value` assignments, with a placeholder exemption so documentation
+  (`API_KEY=${VAR}`, `TOKEN=your-token-here`, `changeme`) survives.
+
+### Added — tools
+
+- **`supermemory_save_many`** stores 1–50 focused documents through
+  `POST /ns/{ns}/document/batch`, redacting each document before sending and reporting
+  accepted and failed items. This also makes the batch endpoint part of the supported API
+  surface (see `docs/API-COVERAGE.md`).
+- **`supermemory_search` retries an empty result once** (`searchRetry`) with query rewriting
+  and a broader mode, then says it did.
+- **`supermemory_save` accepts an explicit `dreaming` mode** and its result explains that
+  facts are extracted in the background, so a save→search→empty loop is avoided.
+- **`supermemory_forget` accepts `memoryIds` (1–100)**, previews at most five candidates
+  with their ids for a semantic query, asks for a confirmed call by id, and reports per-id
+  refusals as ids plus safe codes only.
+- **`supermemory_list` reports pagination** (`page X of Y, N items total`), offers the next
+  page, and points at `supermemory_read_document`; rows include status and date.
+- **`supermemory_profile` renders stable, recent and bucket sections** with `+N more`.
+- **`supermemory_namespaces` states the active container** and that a per-call container
+  argument never changes it.
+- **Tool descriptions are a routing graph**: each names the sibling tool that answers the
+  adjacent question, the negatives ("facts only, not the profile"; "metadata, not content";
+  "memory ids are not document ids"), the proactive-search policy, and the ids' destinations.
+
+### Compatibility
+
+- **Changed defaults**, each documented above: `minQueryChars` 3 → 12, `captureDreaming`
+  inherit → dynamic, recall now uses `memories` / 0.5 / 5 facts by default, captures carry
+  the default extraction guidance, include tool output, and stop re-injecting the profile on
+  every turn. Set `recallSearchMode: inherit`-style old behaviour through the individual keys
+  (`recallSearchMode: hybrid`, `recallThreshold: 0.3`, `recallMaxResults: 6`,
+  `captureDreaming: inherit`, `captureContext: ""`, `captureTools: false`,
+  `minQueryChars: 3`) when a deployment needs the 0.8.0 shape.
+- Config keys were not renamed or removed; unknown keys still fail loudly. No new
+  dependencies (runtime remains `node:` builtins plus `@deepseek-ai/schemastery`).
+- The release tag and push are the operator's action.
+
+### Tests
+
+- 163 → **194 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
+  `test/tools-official.test.mjs` cover tool capture, privacy, project identity, recall
+  dedupe, profile sections, discovery, query cache, project scope, batch writes, forget by
+  ids, pagination, the skill, and every new setting. Existing suites were updated for the
+  new defaults.
+
 ## [0.8.0] — 2026-11-28
 
 This release closes the gap between the Supermemory v5 API and what the plugin exposed:

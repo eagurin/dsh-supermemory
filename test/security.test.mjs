@@ -61,7 +61,7 @@ test('the recall block is delimited by a per-turn nonce and its content is sanit
     const preStep = hook(host, 'agent/pre-step')
     const decision = {
       kind: 'enter',
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello, what do you remember about deploys?' }], source: { kind: 'user' } }],
     }
     const result = await preStep.handler(
       { agent: { id: 'sess-1', session: { header: {} } }, messages: decision.messages, turn: 1, step: 1, signal: new AbortController().signal },
@@ -135,7 +135,7 @@ test('defineTool emits an object-rooted JSON Schema and validates required argum
 test('every registered tool ships a real JSON Schema with its required list', async () => {
   const host = await createHost()
   try {
-    assert.equal(host.tools.size, 11)
+    assert.equal(host.tools.size, 12)
     for (const [name, tool] of host.tools) {
       assert.equal(tool.parameters.type, 'object', `${name} is not object-rooted`)
       assert.ok(tool.parameters.properties, `${name} has no properties`)
@@ -143,6 +143,9 @@ test('every registered tool ships a real JSON Schema with its required list', as
     }
     const search = host.tools.get('supermemory_search')
     assert.deepEqual(search.parameters.required, ['query'])
+    const batch = host.tools.get('supermemory_save_many')
+    assert.deepEqual(batch.parameters.required, ['documents'])
+    assert.equal(batch.parameters.properties.documents.maxItems, 50)
     const history = host.tools.get('supermemory_memory_history')
     assert.deepEqual(history.parameters.required, ['memoryId'])
     assert.equal(history.parameters.properties.includeVersions.type, 'boolean')

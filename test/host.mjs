@@ -14,6 +14,7 @@ export async function createHost(options = {}) {
   const handlers = []
   const sections = []
   const calls = []
+  const skills = []
 
   const ctx = {
     tools: { register: spec => tools.set(spec.name, spec) },
@@ -23,6 +24,22 @@ export async function createHost(options = {}) {
     on: (name, handler) => handlers.push({ name, handler }),
     credentials: { resolve: async () => ({ value: options.apiKey ?? 'test-key' }) },
     logger: { debug: () => {}, warn: () => {}, info: () => {}, error: () => {} },
+    // Optional services are injected the Cordis way: call the callback with a
+    // scoped context that offers the service.
+    inject: (deps, callback) => {
+      if (!Array.isArray(deps) || !deps.includes('skills')) return
+      const scoped = {
+        ...ctx,
+        effect: fn => fn(),
+        skills: {
+          register: spec => {
+            skills.push(spec)
+            return () => {}
+          },
+        },
+      }
+      callback(scoped)
+    },
   }
 
   const originalFetch = globalThis.fetch
@@ -50,6 +67,7 @@ export async function createHost(options = {}) {
     handlers,
     sections,
     calls,
+    skills,
     restore: () => { globalThis.fetch = originalFetch },
   }
 }

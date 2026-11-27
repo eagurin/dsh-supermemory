@@ -20,8 +20,14 @@
 - **История памяти.** `supermemory_memory_history` читает одну память по id: цепочку версий,
   связи `extends`/`derives`, даты и при желании фрагмент исходного документа — то есть эволюцию
   позиции, а не только её последнюю формулировку.
-- **Одиннадцать инструментов**: search, memory_history, profile, save, forget, read_document, list,
-  namespaces, upload_file, namespace, buckets.
+- **Двенадцать инструментов**: search, memory_history, profile, save, save_many, forget, read_document,
+  list, namespaces, upload_file, namespace, buckets.
+- **Встроенный skill.** Бандл регистрирует skill `supermemory` (как официальный skill Supermemory):
+  когда искать, что стоит сохранять, как читать историю памяти и как индексировать проект; модель
+  загружает его по необходимости, а не держит инструкции в каждом промпте.
+- **Recall не повторяется.** Факты, уже показанные в сессии, пропускаются, профиль обновляется по
+  расписанию, а не подмешивается каждый ход, поиск предпочитает извлечённые памяти с более высоким
+  порогом, и блок говорит, откуда факты.
 - **Честный recall.** Если recall не успел, блок прямо говорит об этом
   (`memory recall unavailable (timeout) — proceed without memory`), а не отдаёт молча только профиль.
 
@@ -62,17 +68,17 @@ node scripts/setup.mjs --json          # машинный план (код 3 и 
 1. **Попросить агента** (работает сразу): сказать ему установить бандл
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0
    ```
 
 2. **GUI**: *Plugins → Add plugin* — вставьте
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0` в поле **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0` в поле **Package name or address**.
 
 3. **CLI**, если есть Node 22+ и сеть (профиль `desktop` должен уже существовать, приложение — быть
    полностью закрыто, `pnpm` — быть в `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0"
    ```
 
 Бандл сам вставляет свой `cordis.patch.yml`, вручную строку писать не нужно. Обычный
@@ -124,11 +130,25 @@ refs:
 | `maxCaptureChars` | `120000` | Предел тела транскрипта; больше — режется на части (к документу добавляется короткий заголовок). |
 | `captureTurnsPerChunk` | `25` | Ходов в одной части (минимум 1). |
 | `filter` | `""` | Фильтр по метаданным (JSON) для recall в своём namespace. |
+| `recallMaxResults` | `5` | Фактов в автоматическом recall-блоке. |
+| `recallSearchMode` | `memories` | Поверхность поиска для recall (извлечённые памяти без дублей чанков). |
+| `recallThreshold` | `0.5` | Порог релевантности для recall (у инструмента поиска остаётся `threshold`). |
+| `recallFactMaxChars` | `320` | Максимальная длина факта в recall-блоке. |
+| `recallQueryMaxChars` | `500` | Максимальная длина запроса recall. |
+| `recallQueryCacheMs` | `600000` | Переиспользовать успешный одинаковый recall-поиск между сессиями; `0` выключает. |
+| `recallScope` | `all` | `project` — recall только по `project_id` этого репозитория. |
+| `recallDedupe` | `true` | Пропускать факты, уже показанные в этой сессии (сбрасывается после компакции). |
+| `discoveryNotice` | `true` | Один раз сказать сессии, что recall ничего не нашёл и стоит вызвать поиск. |
+| `captureTools` | `true` | Включать в захват вызовы инструментов и их результаты (с именами и ошибками). |
+| `captureToolChars` | `800` | Максимальная длина текста результата инструмента в захвате. |
+| `captureFailureNotice` | `true` | Сообщать в следующем recall-блоке о неудачном захвате. |
+| `searchRetry` | `true` | Один повтор пустого `supermemory_search` с rewrite и более широким режимом. |
+| `profileSectionFacts` | `8` | Фактов в секции профиля до пометки `+N more`. |
 | `recallIncludeRelated` | `false` | Показывать в recall-блоке связи (`updates`/`extends`/`derives`); по одной связи на факт. |
 | `recallRerank` | `inherit` | Reranking для recall-поиска; `inherit` берёт значение `rerank`. |
 | `recallFailureNotice` | `true` | Явная строка `memory recall unavailable (…)` в блоке, если recall упал или не успел. |
 | `dreaming` | `instant` | Режим обработки явных сохранений и загрузок файлов (`instant` или `dynamic`). |
-| `captureDreaming` | `inherit` | Режим обработки автоматического capture; `inherit` берёт значение `dreaming`. |
+| `captureDreaming` | `dynamic` | Режим обработки автоматического capture; `inherit` берёт значение `dreaming`. `dynamic` группирует связанные захваты (лучше памяти, позже видны), `instant` — сразу и с доп. операцией на документ. |
 | `captureContext` | `""` | Подсказка извлечения для capture (≤1500 символов); пусто — решает сервер. |
 | `rewriteQuery` | `false` | Сервер переформулирует запрос (+~400 мс). |
 | `allowFileUpload` / `uploadRoots` | `false` / `[]` | Загрузка локальных файлов и разрешённые каталоги. |

@@ -52,11 +52,14 @@ test('a capture stores the session start date, a project group, taskType and the
     assert.equal(writes.length, 1, 'expected one document write')
     const body = writes[0].body
     assert.equal(body.date, '2026-11-20T10:00:00.000Z', 'the document was dated by the write, not by the session')
-    assert.deepEqual(body.group, { project: 'secret-project', kind: 'conversation' })
+    assert.equal(body.group.project, 'secret-project')
+    assert.equal(body.group.kind, 'conversation')
+    assert.match(body.group.project_id, /^[0-9a-f]{16}$/)
     assert.equal(JSON.stringify(body.group).includes('/Users'), false, 'the group leaked an absolute path')
     assert.equal(body.taskType, 'memory')
-    assert.equal(body.dreaming, 'instant')
+    assert.equal(body.dreaming, 'dynamic')
     assert.equal(body.metadata.project, 'secret-project')
+    assert.match(body.metadata.project_id, /^[0-9a-f]{16}$/)
     assert.equal(body.metadata.kind, 'conversation')
     assert.equal(body.metadata.type, 'conversation')
   } finally {
@@ -75,9 +78,11 @@ test('updating an existing capture sends the same temporal and grouping fields a
     assert.equal(writes[0].method, 'PATCH')
     const body = writes[0].body
     assert.equal(body.date, '2026-11-21T08:00:00.000Z')
-    assert.deepEqual(body.group, { project: 'secret-project', kind: 'conversation' })
+    assert.equal(body.group.project, 'secret-project')
+    assert.equal(body.group.kind, 'conversation')
+    assert.match(body.group.project_id, /^[0-9a-f]{16}$/)
     assert.equal(body.taskType, 'memory')
-    assert.equal(body.dreaming, 'instant')
+    assert.equal(body.dreaming, 'dynamic')
     assert.equal('id' in body, false, 'a PATCH must not repeat the document id in the body')
   } finally {
     host.restore()
@@ -141,12 +146,13 @@ test('captureContext becomes the extraction guidance of a capture', async () => 
   }
 })
 
-test('captureDreaming inherits dreaming and an explicit value wins', () => {
-  assert.equal(resolveSettings({}).captureDreaming, 'instant')
-  assert.equal(resolveSettings({ dreaming: 'dynamic' }).captureDreaming, 'dynamic')
+test('captureDreaming defaults to dynamic, can inherit, and an explicit value wins', () => {
+  assert.equal(resolveSettings({}).captureDreaming, 'dynamic')
+  assert.equal(resolveSettings({ captureDreaming: 'inherit' }).captureDreaming, 'instant')
+  assert.equal(resolveSettings({ dreaming: 'dynamic', captureDreaming: 'inherit' }).captureDreaming, 'dynamic')
   assert.equal(resolveSettings({ dreaming: 'dynamic', captureDreaming: 'instant' }).captureDreaming, 'instant')
   assert.equal(resolveSettings({ captureDreaming: 'dynamic' }).dreaming, 'instant')
-  assert.equal(resolveSettings({ captureDreaming: 'bogus' }).captureDreaming, 'instant')
+  assert.equal(resolveSettings({ captureDreaming: 'bogus' }).captureDreaming, 'dynamic')
   assert.equal(resolveSettings({ recallRerank: 'inherit', rerank: 'order' }).recallRerank, 'order')
   assert.equal(resolveSettings({ recallRerank: 'aggregate' }).recallRerank, 'aggregate')
   assert.equal(resolveSettings({}).recallIncludeRelated, false)
