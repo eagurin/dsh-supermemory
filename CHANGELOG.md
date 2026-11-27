@@ -75,9 +75,19 @@ they exposed. Every mechanism below was read from their source, not inferred fro
   scope keeps using it only when asked.
 - **Explicit saves are redacted too** (single and batch), so the capture guarantee
   cannot be bypassed by writing through `supermemory_save`.
-- **Redaction covers more shapes**: credentials in URLs (`scheme://user:pass@`), JWTs, and
-  `KEY=value` / `KEY: value` assignments, with a placeholder exemption so documentation
-  (`API_KEY=${VAR}`, `TOKEN=your-token-here`, `changeme`) survives.
+- **Redaction covers more shapes**: credentials in URLs (`scheme://user:pass@`, `?token=…`),
+  JWTs, and `KEY=value` / `KEY: value` assignments, with a tightened placeholder exemption so
+  documentation (`API_KEY=${VAR}`, `TOKEN=your-token-here`, `changeme`) survives while
+  example-prefixed or mixed-case values are still redacted. The same structural redaction now
+  applies to `title`, `context` and `group` values on single and batch saves.
+- **Private material is not echoed back**: `<private>` spans are stripped with a linear scanner
+  (unmatched tags cannot cause quadratic work), a fully private turn is dropped with its answer,
+  and text marked private is redacted where the model or a later compaction summary repeats it.
+- **No absolute local path leaves the machine**: the transcript header and metadata carry the
+  project name and hashed `project_id`, not the workspace path.
+- **The recall query cache is keyed by a credential fingerprint** as well as endpoint, container,
+  query, filter, mode, threshold and limit, so a changed key never serves the previous account's
+  cached memories.
 
 ### Added — tools
 
@@ -116,7 +126,7 @@ they exposed. Every mechanism below was read from their source, not inferred fro
 
 ### Tests
 
-- 163 → **200 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
+- 163 → **206 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
   `test/tools-official.test.mjs` cover tool capture, privacy, project identity, recall
   dedupe, profile sections, discovery, query cache, project scope, batch writes, forget by
   ids, pagination, the skill, and every new setting. Existing suites were updated for the

@@ -86,6 +86,9 @@ test('capture redaction covers URL credentials, JWTs and assignments but keeps p
     'API_KEY=${SUPERMEMORY_KEY}',
     'TOKEN=your-token-here',
     'PASSWORD: changeme',
+    'DATABASE_URL=https://db.example.test/app?token=prod-secret-ABCDEF123456&x=1',
+    'TOKEN=example-prod-secret-ABCDEF123456',
+    'PASSWORD="<prod-secret-ABCDEF123456>"',
   ].join('\n')
   const redacted = redactSecrets(text, true)
   assert.equal(redacted.includes('s3cr3tpass'), false)
@@ -95,6 +98,75 @@ test('capture redaction covers URL credentials, JWTs and assignments but keeps p
   assert.equal(redacted.includes('${SUPERMEMORY_KEY}'), true, 'a template placeholder was destroyed')
   assert.equal(redacted.includes('your-token-here'), true, 'a documented placeholder was destroyed')
   assert.equal(redacted.includes('changeme'), true, 'a placeholder value was destroyed')
+  assert.equal(redacted.includes('prod-secret-ABCDEF123456'), false, 'a URL query token or an example-prefixed secret survived')
+  assert.equal(redacted.includes('token=[redacted]'), true)
+})
+
+test('private text echoed later or repeated in a compaction summary is redacted', () => {
+  const secret = 'super-secret-customer-id-7788'
+  const messages = [
+    { ...userTurn(`<private>${secret}</private> please fix the deploy pipeline`), id: 'p1' },
+    answer(`I will use ${secret} for the request`),
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'bash', arguments: '{}' }] },
+    { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: `curl with ${secret}` }] },
+    { role: 'user', content: [{ type: 'text', text: `summary of earlier turns: the operator mentioned ${secret}` }], source: { kind: 'compact-checkpoint' } },
+  ]
+  const plan = buildTranscriptChunks(session('session-private-echo', messages), resolveSettings({ minCaptureChars: 5 }))
+  const content = plan.documents[0].content
+  assert.equal(content.includes(secret), false, 'private text echoed by the model or a summary reached memory')
+  assert.match(content, /please fix the deploy pipeline/)
+})
+
+test('private fragments persist across capture calls so a later summary is still redacted', () => {
+  const fragments = []
+  const secret = 'private-address-9911'
+  const first = [
+    { ...userTurn(`<private>${secret}</private> book the meeting`), id: 'p1' },
+    answer('booked'),
+  ]
+  buildTranscriptChunks(session('session-private-persist', first), resolveSettings({ minCaptureChars: 5 }), { privateFragments: fragments })
+  const later = [
+    { role: 'user', content: [{ type: 'text', text: `summary: earlier the operator wrote ${secret}` }], source: { kind: 'compact-checkpoint' } },
+    userTurn('continue'),
+  ]
+  const plan = buildTranscriptChunks(session('session-private-persist', later), resolveSettings({ minCaptureChars: 5 }), { privateFragments: fragments })
+  assert.equal(plan.documents[0].content.includes(secret), false)
+})
+
+test('unmatched private markers are scanned in linear time', () => {
+  const hostile = '<private>'.repeat(24000)
+  const started = Date.now()
+  const cleaned = stripPrivate(hostile)
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 2000, `stripPrivate took ${elapsed} ms on ${hostile.length} bytes`)
+  assert.equal(cleaned.length, hostile.length)
+})
+
+test('the captured document and metadata never carry the absolute workspace path', async () => {
+  const writes = []
+  const host = await createHost({
+    config: { captureDebounceMs: 5, container: 'dsh', minCaptureChars: 5 },
+    fetchHandler: (url, init = {}) => {
+      if (init.method === 'PATCH') return { status: 404, body: { error: 'Document not found' } }
+      if (init.method === 'POST' && url.endsWith('/document')) {
+        writes.push(JSON.parse(String(init.body)))
+        return { body: { id: 'x', status: 'queued' } }
+      }
+      return { body: {} }
+    },
+  })
+  try {
+    const capture = hook(host, 'session/event')
+    const s = session('session-path', [userTurn('a decision worth keeping for later'), answer('noted')], { cwd: '/Users/someone/private/secret-project' })
+    capture.handler(s, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const body = writes[0]
+    assert.equal(body.content.includes('/Users/someone/private'), false, 'the transcript header leaked the absolute path')
+    assert.equal(JSON.stringify(body.metadata).includes('/Users/someone'), false, 'metadata leaked the absolute path')
+    assert.equal(body.metadata.project, 'secret-project')
+  } finally {
+    host.restore()
+  }
 })
 
 test('a git remote gives a stable path-free project identity', () => {

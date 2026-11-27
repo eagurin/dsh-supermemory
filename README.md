@@ -265,6 +265,11 @@ What the plugin guarantees:
   `<supermemory-context>` tag, and leading `##` heading markers before it is shown.
 - **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`, `Bearer …`, PEM
   blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a transcript is sent.
+- **No absolute local paths leave the machine.** The captured document no longer stores the workspace path
+  and neither does metadata: a project name plus a hashed `project_id` identify the context instead.
+- **Private spans are not echoed back.** `<private>…</private>` is redacted, a fully private turn is
+  dropped with its answer, and text marked private is also redacted where the model or a compaction
+  summary repeats it later in the session.
 - **Capture only retires documents it wrote.** Before deleting the legacy single document of a
   session, the plugin re-reads it and requires its own `session_id` and agent metadata, so a note
   saved under a colliding id is never removed.
@@ -294,7 +299,7 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-npm test                     # 200 cases (6 live cases skip without a temporary namespace);
+npm test                     # 206 cases (6 live cases skip without a temporary namespace);
                             # without the line above, 3 Config tests skip
 ```
 

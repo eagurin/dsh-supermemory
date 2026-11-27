@@ -14,7 +14,7 @@ test('the transcript keeps human turns and assistant answers only', () => {
   const content = plan.documents[0]?.content ?? ''
   assert.equal(turns, 1)
   assert.match(content, /# DeepSeek Harness conversation session-test/)
-  assert.match(content, /- workspace: \/workspace\/demo/)
+  assert.equal(content.includes('/workspace/demo'), false, 'the absolute workspace path reached the document')
   assert.match(content, /\*\*User:\*\* Привет, запомни это/)
   assert.match(content, /\*\*Assistant:\*\* Запомнил\./)
   assert.doesNotMatch(content, /recall block/)

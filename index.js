@@ -989,14 +989,17 @@ async function buildRecall(ctx, settings, query, options = {}) {
   const seen = options.seen instanceof Set ? options.seen : undefined
   const stats = options.stats || { repeats: 0 }
   const cache = options.queryCache
+  // A changed credential must not read results cached for the previous account.
+  const fingerprint = cache && typeof options.cacheFingerprint === 'string' ? options.cacheFingerprint : ''
+  const cacheEnabled = Boolean(cache && fingerprint)
   const searchOne = async container => {
     const filter = container === settings.container && options.filter ? options.filter : undefined
-    const cacheKey = cache
+    const cacheKey = cacheEnabled
       ? createHash('sha256').update(JSON.stringify([
-        settings.baseUrl, container, query, filter || null, settings.recallSearchMode, settings.recallThreshold, per, settings.recallRerank,
+        settings.baseUrl, fingerprint, container, query, filter || null, settings.recallSearchMode, settings.recallThreshold, per, settings.recallRerank,
       ])).digest('hex')
       : ''
-    if (cache && cacheKey) {
+    if (cacheEnabled && cacheKey) {
       const cached = cache.map.get(cacheKey)
       if (cached && Date.now() - cached.at < cache.ttlMs && !cached.servedTo.has(cache.sessionId)) {
         // A session that already used this result searches again; other sessions share it.
@@ -1025,7 +1028,7 @@ async function buildRecall(ctx, settings, query, options = {}) {
         signal: options.signal,
       })
       const results = Array.isArray(data && data.results) ? data.results : []
-      if (cache && cacheKey && results.length > 0) {
+      if (cacheEnabled && cacheKey && results.length > 0) {
         // Only successful, non-empty searches are cached; failures are not.
         if (cache.map.size >= 50) {
           const oldest = cache.map.keys().next().value
@@ -1527,6 +1530,17 @@ function buildTranscriptSegments(session, timeOf, captureOptions = {}) {
   const timeFor = typeof timeOf === 'function' ? timeOf : () => undefined
   const captureTools = captureOptions.captureTools !== false
   const toolChars = Number.isFinite(captureOptions.captureToolChars) ? captureOptions.captureToolChars : 800
+  // Private fragments outlive a single turn in the caller's capture state: a
+  // compaction summary can echo text whose original turn is no longer on the surface.
+  const fragments = Array.isArray(captureOptions.privateFragments) ? captureOptions.privateFragments : []
+  const rememberPrivate = text => {
+    for (const span of privateSpans(text)) {
+      const inner = span.inner.trim()
+      if (inner.length < 4 || fragments.includes(inner)) continue
+      if (fragments.length >= 20) fragments.shift()
+      fragments.push(inner.slice(0, 400))
+    }
+  }
   let messages = []
   try {
     const derived = session.deriveMessages()
@@ -1555,7 +1569,7 @@ function buildTranscriptSegments(session, timeOf, captureOptions = {}) {
       }
     }
     if (isCheckpointMessage(message)) {
-      const text = stripPrivate(messageText(message))
+      const text = redactFragments(stripPrivate(messageText(message)), fragments)
       checkpoints += 1
       // `id` is the canonical identity; `source.compactionId`, the text, and finally
       // the ordinal are fallbacks. The ordinal matters: two id-less checkpoints with
@@ -1574,7 +1588,8 @@ function buildTranscriptSegments(session, timeOf, captureOptions = {}) {
     }
     if (isTurnMessage(message)) {
       const rawText = messageText(message)
-      const text = stripPrivate(rawText)
+      rememberPrivate(rawText)
+      const text = redactFragments(stripPrivate(rawText), fragments)
       if (!text) continue
       if (isFullyPrivate(rawText, text)) {
         // `<private>` around the whole request: nothing of this turn may be stored.
@@ -1593,7 +1608,7 @@ function buildTranscriptSegments(session, timeOf, captureOptions = {}) {
       const name = sanitizeShort(toolNames.get(message.toolCallId) || 'tool', 40) || 'tool'
       // The plugin's own tools would feed memory back into the capture.
       if (name.startsWith('supermemory_')) continue
-      const raw = stripPrivate(messageText(message))
+      const raw = redactFragments(stripPrivate(messageText(message)), fragments)
       if (!raw) continue
       const text = raw.length > toolChars ? `${raw.slice(0, toolChars)}…` : raw
       const label = `**Tool ${name}${message.isError === true ? ' (error)' : ''}:**`
@@ -1607,7 +1622,7 @@ function buildTranscriptSegments(session, timeOf, captureOptions = {}) {
     }
     if (message.role === 'assistant') {
       if (skippingPrivate) continue
-      const text = stripPrivate(messageText(message))
+      const text = redactFragments(stripPrivate(messageText(message)), fragments)
       if (!text) continue
       if (!current) {
         // An assistant message before any turn: keep it, it is still context.
@@ -1655,7 +1670,7 @@ const SECRET_PATTERNS = [
 ]
 
 /** Values that look like documentation placeholders, not credentials. */
-const PLACEHOLDER_VALUE = /^(?:\[redacted[^\]]*\]|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|%[A-Z0-9_]+%|your[_-]?.*|example.*|sample.*|dummy.*|changeme.*|placeholder.*|test[_-]?key.*|x{3,}|\*{3,}|-{3,})$/i
+const PLACEHOLDER_VALUE = /^(?:\[redacted[^\]]*\]|<(?:[A-Z][A-Z0-9_]*|[a-z][a-z0-9_ -]*)>|\$\{[^}]*\}|\{\{[^}]*\}\}|%[A-Z0-9_]+%|your[_-][a-z0-9_-]{1,30}|(?:example|sample|dummy|placeholder)(?:[_-][a-z0-9_-]{0,30})?|changeme[0-9_-]*|test[_-]?(?:key|token|secret|value)|x{3,}|\*{3,}|-{3,})$/
 
 /**
  * Redact `KEY=value` and `KEY: value` credential assignments without destroying
@@ -1665,7 +1680,7 @@ const PLACEHOLDER_VALUE = /^(?:\[redacted[^\]]*\]|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\
  */
 function redactAssignments(text) {
   return String(text).replace(
-    /(\b[A-Za-z][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Za-z0-9_]*)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[^\s,;'"`<>]{8,})/gi,
+    /\b((?:[A-Z][A-Z0-9_]*)?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*)\b(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[^\s,;'"`<>]{8,})/g,
     (match, name, separator, rawValue) => {
       const quoted = rawValue.length >= 2 && (rawValue.startsWith('"') || rawValue.startsWith("'"))
       const value = quoted ? rawValue.slice(1, -1) : rawValue
@@ -1690,11 +1705,36 @@ function redactSecrets(text, enabled) {
   if (!enabled || typeof text !== 'string' || text.length === 0) return text
   let output = text
   for (const pattern of SECRET_PATTERNS) output = output.replace(pattern, '[redacted]')
+  // Tokens carried in a URL query string (`?token=…`, `&api_key=…`).
+  output = output.replace(/([?&](?:token|key|api[_-]?key|access[_-]?token|secret|password)=)[^&#\s]+/gi, '$1[redacted]')
   return redactAssignments(output)
 }
 
-/** The user-controlled opt-out marker for content that must never leave the machine. */
-const PRIVATE_BLOCK = /<private>[\s\S]*?<\/private>/gi
+/** The user-controlled opt-out markers for content that must never leave the machine. */
+const PRIVATE_OPEN = '<private>'
+const PRIVATE_CLOSE = '</private>'
+
+/**
+ * Locate `<private>…</private>` spans without a lazy regex: an unmatched opening
+ * tag must not make the scan quadratic on hostile input.
+ * @param {string} text - transcript text.
+ * @returns {Array<{start: number, end: number, inner: string}>} private spans.
+ */
+function privateSpans(text) {
+  const source = String(text)
+  const lower = source.toLowerCase()
+  const spans = []
+  let index = 0
+  for (;;) {
+    const start = lower.indexOf(PRIVATE_OPEN, index)
+    if (start < 0) break
+    const end = lower.indexOf(PRIVATE_CLOSE, start + PRIVATE_OPEN.length)
+    if (end < 0) break
+    spans.push({ start, end: end + PRIVATE_CLOSE.length, inner: source.slice(start + PRIVATE_OPEN.length, end) })
+    index = end + PRIVATE_CLOSE.length
+  }
+  return spans
+}
 
 /**
  * Remove `<private>…</private>` blocks from captured text.
@@ -1702,7 +1742,53 @@ const PRIVATE_BLOCK = /<private>[\s\S]*?<\/private>/gi
  * @returns {string} text with private spans replaced by `[redacted]`.
  */
 function stripPrivate(text) {
-  return typeof text === 'string' ? text.replace(PRIVATE_BLOCK, '[redacted]') : text
+  if (typeof text !== 'string') return text
+  const spans = privateSpans(text)
+  if (spans.length === 0) return text
+  let output = ''
+  let index = 0
+  for (const span of spans) {
+    output += `${text.slice(index, span.start)}[redacted]`
+    index = span.end
+  }
+  return output + text.slice(index)
+}
+
+/**
+ * Redact known private fragments (things the operator explicitly marked private)
+ * wherever they were echoed later, including a compaction summary.
+ * @param {string} text - text to clean.
+ * @param {string[]} fragments - private inner texts collected in the session.
+ * @returns {string} text with those fragments replaced.
+ */
+function redactFragments(text, fragments) {
+  if (typeof text !== 'string' || fragments.length === 0) return text
+  let output = text
+  for (const fragment of fragments) {
+    if (typeof fragment !== 'string' || fragment.length < 4) continue
+    const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    output = output.replace(new RegExp(escaped, 'gi'), '[redacted]')
+  }
+  return output
+}
+
+/**
+ * Redact credential shapes inside a nested plain-object structure (groups,
+ * metadata, per-document fields), without changing non-string values.
+ * @param {unknown} value - structure to clean.
+ * @param {boolean} enabled - whether redaction is on.
+ * @returns {unknown} a cleaned copy.
+ */
+function redactStructure(value, enabled) {
+  if (!enabled) return value
+  if (typeof value === 'string') return redactSecrets(value, true)
+  if (Array.isArray(value)) return value.map(item => redactStructure(item, enabled))
+  if (value && typeof value === 'object') {
+    const output = {}
+    for (const [key, item] of Object.entries(value)) output[key] = redactStructure(item, enabled)
+    return output
+  }
+  return value
 }
 
 /** Whether a turn carried private content and nothing else, so it must be dropped. */
@@ -1726,6 +1812,22 @@ function normalizeGitRemote(remote) {
   text = text.replace(/\/+$/, '')
   const [host, ...rest] = text.split('/')
   return `${String(host).toLowerCase()}/${rest.join('/')}`.toLowerCase().replace(/\/+$/, '')
+}
+
+/**
+ * Short fingerprint of the resolved credential, used to keep the recall query
+ * cache from serving one account's memories after the key changed.
+ * @param {object} ctx - plugin context.
+ * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
+ * @returns {Promise<string>} a 16-character fingerprint, or an empty string.
+ */
+async function credentialFingerprint(ctx, settings) {
+  try {
+    const key = await resolveApiKey(ctx, settings)
+    return key ? createHash('sha256').update(key).digest('hex').slice(0, 16) : ''
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -1799,7 +1901,8 @@ function transcriptHeader(session, turns, part) {
     '',
     `- agent: DeepSeek Harness (${SOURCE})`,
     `- session: ${session.id}`,
-    header.cwd ? `- workspace: ${header.cwd}` : '',
+    // The absolute workspace path stays on the machine; the project name and its
+    // hash travel in metadata/group instead.
     `- user turns: ${turns}`,
     '',
     '## Conversation',
@@ -1849,6 +1952,7 @@ function buildTranscriptChunks(session, settings, options = {}) {
   const { segments, turns, checkpointIds } = buildTranscriptSegments(session, options.timeOf, {
     captureTools: settings.captureTools,
     captureToolChars: settings.captureToolChars,
+    privateFragments: options.privateFragments,
   })
   const family = familyTag(checkpointIds)
   const baseId = family === 'g0' ? `dsh-${sessionId}` : `dsh-${sessionId}-${family}`
@@ -2309,6 +2413,9 @@ export const internals = {
   projectIdentity,
   projectFromExec,
   stripPrivate,
+  privateSpans,
+  redactFragments,
+  redactStructure,
   isFullyPrivate,
   stripDataUris,
   normalizeGitRemote,
@@ -2450,6 +2557,7 @@ export function apply(ctx, raw) {
         }
       }
       const stats = { repeats: 0 }
+      const cacheFingerprint = settings.recallQueryCacheMs > 0 ? await credentialFingerprint(ctx, settings) : ''
       const refreshProfile = settings.profileFrequency > 0
         && (payload.turn === 1 || payload.turn % settings.profileFrequency === 0)
       // Profiles refresh in parallel with the searches; on other turns the block
@@ -2506,6 +2614,7 @@ export function apply(ctx, raw) {
           queryCache: settings.recallQueryCacheMs > 0
             ? { map: recallQueryCache, ttlMs: settings.recallQueryCacheMs, sessionId }
             : undefined,
+          cacheFingerprint,
           seen,
           stats,
           signal: payload.signal,
@@ -2599,6 +2708,7 @@ export function apply(ctx, raw) {
       const plan = buildTranscriptChunks(session, settings, {
         timeOf: message => (message && message.id ? state.times.get(message.id) : undefined),
         startedAt: state.startedAt,
+        privateFragments: state.privateFragments,
       })
       if (plan.documents.length === 0) return
 
@@ -2619,7 +2729,7 @@ export function apply(ctx, raw) {
         family: plan.family,
         updated_at: new Date().toISOString(),
       }
-      if (session.header && session.header.cwd) baseMetadata.workspace = String(session.header.cwd)
+      // No absolute path leaves the machine: project + project_id identify the context.
 
       try {
         let written = 0
@@ -2735,6 +2845,7 @@ export function apply(ctx, raw) {
         lastTurns: 0,
         startedAt: undefined,
         times: new Map(),
+        privateFragments: [],
       }
       captureState.set(sessionId, state)
       // The map may briefly exceed its soft limit when every tracked session has
@@ -3157,7 +3268,7 @@ export function apply(ctx, raw) {
       // the server unless the operator disabled redaction.
       const content = redactSecrets(rawContent, settings.redactSecrets !== false)
       // Validate the temporal and grouping arguments before any network I/O.
-      const group = normalizeGroup(args.group, 'group')
+      let group = normalizeGroup(args.group, 'group')
       let date
       if (args.date !== undefined && args.date !== null && String(args.date).trim() !== '') {
         const parsed = new Date(String(args.date).trim())
@@ -3168,6 +3279,10 @@ export function apply(ctx, raw) {
       const documentId = args.documentId
         ? String(args.documentId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
         : `${SOURCE}-${randomUUID()}`
+      const redactWrites = settings.redactSecrets !== false
+      // The group isolates context for the server; its project and kind are also
+      // copied into metadata so later list filters can select on them directly.
+      if (group) group = redactStructure(group, redactWrites)
       const metadata = { sm_source: SOURCE, source_agent: 'deepseek-harness', type: 'note', kind: 'note' }
       const callProject = projectFromExec(exec)
       let effectiveGroup = group
@@ -3187,7 +3302,10 @@ export function apply(ctx, raw) {
       if (effectiveGroup && typeof effectiveGroup.project === 'string') metadata.project = effectiveGroup.project
       if (effectiveGroup && typeof effectiveGroup.kind === 'string') metadata.kind = effectiveGroup.kind
       if (effectiveGroup && typeof effectiveGroup.project_id === 'string') metadata.project_id = effectiveGroup.project_id
-      if (args.title) metadata.title = String(args.title).slice(0, 200)
+      if (args.title) metadata.title = redactSecrets(String(args.title).slice(0, 200), redactWrites)
+      const supportingContext = args.context
+        ? redactSecrets(String(args.context).slice(0, 1500), redactWrites)
+        : undefined
       const dreaming = args.dreaming === 'instant' || args.dreaming === 'dynamic' ? args.dreaming : settings.dreaming
       await api(ctx, settings, `/ns/${encodeURIComponent(container)}/document`, {
         method: 'POST',
@@ -3199,7 +3317,7 @@ export function apply(ctx, raw) {
           dreaming,
           ...(date ? { date } : {}),
           ...(effectiveGroup ? { group: effectiveGroup } : {}),
-          ...(args.context ? { supportingContext: String(args.context).slice(0, 1500) } : {}),
+          ...(supportingContext ? { supportingContext } : {}),
         },
         signal: exec.signal,
       })
@@ -3261,7 +3379,7 @@ export function apply(ctx, raw) {
         if (!entry || typeof entry !== 'object') throw new Error(`documents[${index}] must be an object`)
         const content = String(entry.content || '').trim()
         if (content.length < 8) throw new Error(`documents[${index}].content must be meaningful text`)
-        const group = normalizeGroup(entry.group, `documents[${index}].group`)
+        const group = redactStructure(normalizeGroup(entry.group, `documents[${index}].group`), settings.redactSecrets !== false)
         let date
         if (entry.date !== undefined && entry.date !== null && String(entry.date).trim() !== '') {
           const parsed = new Date(String(entry.date).trim())
@@ -3271,7 +3389,7 @@ export function apply(ctx, raw) {
         const metadata = { sm_source: SOURCE, source_agent: 'deepseek-harness', type: 'note', kind: 'note' }
         if (group && typeof group.project === 'string') metadata.project = group.project
         if (group && typeof group.kind === 'string') metadata.kind = group.kind
-        if (entry.title) metadata.title = String(entry.title).slice(0, 200)
+        if (entry.title) metadata.title = redactSecrets(String(entry.title).slice(0, 200), settings.redactSecrets !== false)
         items.push({
           // Bulk indexing pastes repository text: redact before it leaves the machine.
           content: redactSecrets(content, settings.redactSecrets !== false),
@@ -3279,7 +3397,7 @@ export function apply(ctx, raw) {
           metadata,
           ...(date ? { date } : {}),
           ...(group ? { group } : {}),
-          ...(entry.context ? { supportingContext: String(entry.context).slice(0, 1500) } : {}),
+          ...(entry.context ? { supportingContext: redactSecrets(String(entry.context).slice(0, 1500), settings.redactSecrets !== false) } : {}),
         })
       }
       const container = await resolveWriteContainer(args.container)
@@ -3646,11 +3764,11 @@ export function apply(ctx, raw) {
         file_name: verdict.name,
         bytes: verdict.size,
       }
-      if (args.title) metadata.title = String(args.title).slice(0, 200)
+      if (args.title) metadata.title = redactSecrets(String(args.title).slice(0, 200), settings.redactSecrets !== false)
       const form = new FormData()
       form.set('file', new Blob([buffer], { type: verdict.mime }), verdict.name)
       form.set('metadata', JSON.stringify(metadata))
-      if (args.context) form.set('supportingContext', String(args.context).slice(0, 1500))
+      if (args.context) form.set('supportingContext', redactSecrets(String(args.context).slice(0, 1500), settings.redactSecrets !== false))
       // The file endpoint takes the same processing fields as the text endpoint.
       form.set('taskType', 'memory')
       form.set('dreaming', settings.dreaming)

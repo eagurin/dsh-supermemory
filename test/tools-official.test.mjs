@@ -195,6 +195,36 @@ test('batch save posts redacted focused documents and reports partial failures',
   }
 })
 
+test('batch save redacts context, title and group values, not only content', async () => {
+  const writes = []
+  const host = await createHost({
+    fetchHandler: (url, init = {}) => {
+      if (init.method === 'POST' && url.endsWith('/document/batch')) {
+        writes.push(JSON.parse(String(init.body)))
+        return { body: { results: [{ id: 'a', status: 'queued' }], count: 1, failed: 0 } }
+      }
+      return { body: {} }
+    },
+  })
+  try {
+    const tool = host.tools.get('supermemory_save_many')
+    await tool.execute({
+      documents: [{
+        content: 'a durable architecture decision about the API',
+        title: `note ${'sm_' + 'C'.repeat(50)}`,
+        context: `focus on ${'sm_' + 'D'.repeat(50)}`,
+        group: { project: `${'sm_' + 'E'.repeat(50)}`, kind: 'architecture' },
+      }],
+    }, signal())
+    const body = JSON.stringify(writes[0])
+    assert.equal(body.includes('sm_CCCC'), false, 'a title secret was sent')
+    assert.equal(body.includes('sm_DDDD'), false, 'a context secret was sent')
+    assert.equal(body.includes('sm_EEEE'), false, 'a group secret was sent')
+  } finally {
+    host.restore()
+  }
+})
+
 test('batch save validates every document before the network', async () => {
   const host = await createHost()
   try {

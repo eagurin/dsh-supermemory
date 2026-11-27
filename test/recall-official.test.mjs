@@ -257,6 +257,28 @@ test('a successful recall is shared with another session but not reused in the s
   }
 })
 
+test('a cached recall result is not served after the credential changes', async () => {
+  const host = await createHost({
+    config: { profileFrequency: 0 },
+    fetchHandler: (url, init = {}) => {
+      if (!url.includes('/search')) return { body: {} }
+      const auth = String((init.headers && init.headers.Authorization) || '')
+      return { body: { results: [fact(auth.includes('key-a') ? 'account A deploy fact' : 'account B deploy fact')] } }
+    },
+  })
+  try {
+    host.setApiKey('key-a')
+    const first = await runTurn(host, { sessionId: 'session-a', turn: 1 })
+    assert.match(first.text, /account A deploy fact/)
+    host.setApiKey('key-b')
+    const second = await runTurn(host, { sessionId: 'session-b', turn: 1 })
+    assert.match(second.text, /account B deploy fact/, 'the previous account result was served from the cache')
+    assert.equal(host.calls.filter(call => call.url.includes('/search')).length, 2)
+  } finally {
+    host.restore()
+  }
+})
+
 test('project scope matches the project id or the project name so older notes stay visible', async () => {
   const host = await createHost({
     config: { profileFrequency: 0, recallScope: 'project' },

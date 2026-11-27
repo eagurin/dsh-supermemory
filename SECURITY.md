@@ -38,6 +38,15 @@ Does:
   `<<<supermemory-…>>>` shapes and leading `##` heading markers are stripped from recalled
   facts and profile text before they are shown. `supermemory_read_document` keeps the
   document body exact but wraps it in its own nonce-delimited region with a warning line.
+- **Private material is not echoed back.** Text inside `<private>…</private>` is redacted before a
+  transcript leaves the process, a fully private turn is dropped with its answer, and text that was
+  marked private is redacted again where the model or a later compaction summary repeats it.
+  Paraphrases cannot be detected; the marker covers quoted content.
+- **No absolute local path is sent.** Captured content and metadata carry a project name and a
+  hashed `project_id`, not the workspace path.
+- **The recall cache is keyed by credential fingerprint** and by endpoint, container, query,
+  filter, mode, threshold and limit, so a changed key never serves the previous account's
+  cached results.
 - **Capture only retires documents it wrote.** Deleting a legacy single document requires
   re-reading it and matching this plugin's `session_id` and agent metadata first, so a
   saved note that happens to share the id is left alone.

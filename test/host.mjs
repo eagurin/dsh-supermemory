@@ -16,13 +16,14 @@ export async function createHost(options = {}) {
   const calls = []
   const skills = []
 
+  let currentApiKey = options.apiKey ?? 'test-key'
   const ctx = {
     tools: { register: spec => tools.set(spec.name, spec) },
     systemPrompt: { section: spec => sections.push(spec) },
     effect: fn => fn(),
     get: () => undefined,
     on: (name, handler) => handlers.push({ name, handler }),
-    credentials: { resolve: async () => ({ value: options.apiKey ?? 'test-key' }) },
+    credentials: { resolve: async () => ({ value: currentApiKey }) },
     logger: { debug: () => {}, warn: () => {}, info: () => {}, error: () => {} },
     // Optional services are injected the Cordis way: call the callback with a
     // scoped context that offers the service.
@@ -68,6 +69,7 @@ export async function createHost(options = {}) {
     sections,
     calls,
     skills,
+    setApiKey: value => { currentApiKey = value },
     restore: () => { globalThis.fetch = originalFetch },
   }
 }
