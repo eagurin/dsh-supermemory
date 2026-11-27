@@ -144,6 +144,42 @@ test('a long profile cannot crowd the query-specific facts out of the recall blo
   }
 })
 
+test('one long profile in a multi-namespace turn cannot drop the best fact next to it', async () => {
+  // With four searched namespaces the per-section budget is small; a profile used to
+  // be allowed the whole section, so the own-namespace fact (the actual answer) was
+  // clamped away while the block still had thousands of unused characters.
+  const profile = {
+    profile: {
+      static: Array.from({ length: 40 }, (_, index) => ({ id: `p-${index}`, memory: `profile fact ${index} ${'p'.repeat(180)}` })),
+      dynamic: [],
+      buckets: {},
+    },
+  }
+  const host = await createHost({
+    config: { profileFrequency: 1, readContainers: ['r1', 'r2', 'r3'] },
+    fetchHandler: url => {
+      if (url.includes('/ns/dsh/profile')) return { body: profile }
+      if (url.includes('/ns/dsh/search')) return { body: { results: [{ memory: 'the query-specific decision is a Tuesday deploy window', similarity: 0.95 }] } }
+      if (url.includes('/ns/r1/search')) return { body: { results: [{ memory: 'distinct fact one from container r1 about the question', similarity: 0.9 }] } }
+      if (url.includes('/ns/r2/search')) return { body: { results: [{ memory: 'distinct fact two from container r2 about the question', similarity: 0.85 }] } }
+      if (url.includes('/ns/r3/search')) return { body: { results: [{ memory: 'distinct fact three from container r3 about the question', similarity: 0.8 }] } }
+      return { body: {} }
+    },
+  })
+  try {
+    const { text } = await runPreStep(host)
+    assert.match(text, /Tuesday deploy window/, 'the own-namespace answer was evicted by its profile')
+    assert.match(text, /distinct fact one/)
+    assert.match(text, /distinct fact two/)
+    assert.match(text, /distinct fact three/)
+    const profileLines = text.split('\n').filter(line => line.includes('profile fact '))
+    const profileChars = profileLines.reduce((total, line) => total + line.length + 1, 0)
+    assert.ok(profileChars <= 1800, `profile budget exceeded: ${profileChars} characters`)
+  } finally {
+    host.restore()
+  }
+})
+
 test('scheduled and team turns still get recall', async () => {
   for (const kind of ['schedule', 'team-message']) {
     const host = await createHost({

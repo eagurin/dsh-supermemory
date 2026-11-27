@@ -40,7 +40,7 @@ deliberate argument or field omission; **not used** — explained, with the reas
 |---|---|---|---|---|---|
 | 1 | `/ns/{ns}/document` | `POST`, `DELETE` | `supermemory_save`; auto-capture; document retirement | used | `write-path`, `integration`, `regressions` |
 | 2 | `/ns/{ns}/document/batch` | `POST` | — | **not used**: bulk ingestion of up to 600 arbitrary documents is a knowledge-base import, not agent memory; capture writes one upserted document per session part, and a partial-failure batch would be harder to reconcile than the per-document writes already used. | — |
-| 3 | `/ns/{ns}/document/{id}` | `GET`, `PATCH` | `supermemory_read_document`; capture status polling; upsert `PATCH` | used | `read-path`/`history`/`integration` |
+| 3 | `/ns/{ns}/document/{id}` | `GET`, `PATCH` | `supermemory_read_document`; capture status polling; upsert `PATCH` | used | `history`, `write-path`, `integration` |
 | 4 | `/ns/{ns}/document/file` | `POST` | `supermemory_upload_file` | used | `security` (upload policy), `integration` |
 | 5 | `/ns/{ns}/document/file/{id}` | `POST`, `PATCH` | — | **not used**: replacing a file in place would rewrite the source document's content while keeping its id, destroying the very history this release makes readable; no tool needs it. | — |
 | 6 | `/ns/{ns}/search` | `POST` | `supermemory_search`; auto-recall; `supermemory_profile` (query matches) | used | `search`, `recall`, `security` |

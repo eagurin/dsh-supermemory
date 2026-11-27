@@ -180,7 +180,7 @@ Cross-agent reads are deliberately off. To recall Hermes' memory (read-only), ad
 | Tool | What it does |
 |---|---|
 | `supermemory_search` | Semantic search over readable namespaces. Accepts a typed metadata `filter`, `threshold`, `rerank`, `rewriteQuery`, and `includeRelated` / `includeForgotten` / `includeDocuments`; results carry dates, state, relation chains and memory ids. |
-| `supermemory_memory_history` | One memory by id: current text, version chain (nearest first), `extends`/`derives` links, dates, `isLatest`/`isInferred`/`isForgotten`, and an optional source-document excerpt. Read-only. |
+| `supermemory_memory_history` | One memory by id: current text, version chain (nearest first), `extends`/`derives` links, dates, `isLatest`/`isInference`/`isForgotten`, and an optional source-document excerpt. Read-only. |
 | `supermemory_profile` | Persistent facts and recent context, optionally with a query, a metadata `filter`, or selected `buckets`. |
 | `supermemory_save` | Store a document in a writable namespace with an optional `date` and `group`, and report the ingest status. |
 | `supermemory_forget` | Preview matches, then delete by id or description with `confirm: "delete"`. |
@@ -257,7 +257,7 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-node --test test/           # 148 cases (5 live cases skip without a temporary namespace);
+node --test test/           # 149 cases (5 live cases skip without a temporary namespace);
                             # without the line above, 3 Config tests skip
 ```
 

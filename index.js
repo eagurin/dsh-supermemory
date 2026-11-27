@@ -896,11 +896,15 @@ async function buildRecall(ctx, settings, query, options = {}) {
   const budget = Math.max(120, settings.recallMaxChars - close.length - 1)
   const bodyBudget = Math.max(200, budget - header.join('\n').length - 1)
   const sectionBudget = Math.max(200, Math.floor(bodyBudget / Math.max(1, sections.length)))
-  // Profiles share one budget and cannot take more than half of the block.
+  // Profiles share one budget and cannot take more than half of the block; each
+  // profile also takes at most half of its own section, so the query-specific facts
+  // that share that section always keep room. Without the second cap one long
+  // profile filled its section and silently dropped the best fact next to it.
   const profileContainers = sections.filter(container => profileTexts.get(container))
   const profileTotal = Math.max(200, Math.min(settings.profileMaxChars, Math.floor(bodyBudget / 2)))
+  const profileCap = Math.max(120, Math.floor(sectionBudget / 2))
   const profileShare = profileContainers.length > 0
-    ? Math.max(200, Math.floor(profileTotal / profileContainers.length))
+    ? Math.max(1, Math.min(profileCap, Math.floor(profileTotal / profileContainers.length)))
     : 0
   const lines = [...header]
   if (noticeLine) lines.push(noticeLine, '')

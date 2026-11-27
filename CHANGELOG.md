@@ -111,7 +111,7 @@ actions, upload policy) are unchanged and still tested.
 
 ### Tests
 
-- 101 → 148 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
+- 101 → 149 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
   `test/recall.test.mjs`, `test/write-path.test.mjs`,
   `test/profile-list-namespace.test.mjs`, plus an opt-in `test/live.test.mjs` that writes
   only into a `dsh-audit-<YYYYMMDD-HHMM>` namespace, reads real memories from `dsh` to
