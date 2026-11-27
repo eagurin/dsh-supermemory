@@ -86,8 +86,14 @@ they exposed. Every mechanism below was read from their source, not inferred fro
 - **No absolute local path leaves the machine**: the transcript header and metadata carry the
   project name and hashed `project_id`, not the workspace path.
 - **The recall query cache is keyed by a credential fingerprint** as well as endpoint, container,
-  query, filter, mode, threshold and limit, so a changed key never serves the previous account's
-  cached memories.
+  query, filter, mode, threshold and limit, and each recall snapshots the resolved key once, so a
+  changed key never serves the previous account's cached memories.
+- **Private-fragment tracking is bounded and documented** (40 fragments / 20 000 characters per
+  session, newest kept; fragments of three characters or more), private text is redacted in the
+  outbound `title`, `context` and `group` values, and credential-shaped group/metadata keys are
+  replaced instead of sent.
+- **Assignment redaction accepts lowercase names** again (`token=…`) while placeholder matching
+  stays case-sensitive, so mixed-case real secrets are still redacted.
 
 ### Added — tools
 
@@ -126,7 +132,7 @@ they exposed. Every mechanism below was read from their source, not inferred fro
 
 ### Tests
 
-- 163 → **206 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
+- 163 → **209 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
   `test/tools-official.test.mjs` cover tool capture, privacy, project identity, recall
   dedupe, profile sections, discovery, query cache, project scope, batch writes, forget by
   ids, pagination, the skill, and every new setting. Existing suites were updated for the

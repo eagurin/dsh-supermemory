@@ -23,7 +23,7 @@ export async function createHost(options = {}) {
     effect: fn => fn(),
     get: () => undefined,
     on: (name, handler) => handlers.push({ name, handler }),
-    credentials: { resolve: async () => ({ value: currentApiKey }) },
+    credentials: { resolve: async () => ({ value: options.resolveKey ? await options.resolveKey() : currentApiKey }) },
     logger: { debug: () => {}, warn: () => {}, info: () => {}, error: () => {} },
     // Optional services are injected the Cordis way: call the callback with a
     // scoped context that offers the service.

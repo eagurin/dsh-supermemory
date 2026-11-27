@@ -279,6 +279,34 @@ test('a cached recall result is not served after the credential changes', async 
   }
 })
 
+test('each recall snapshots one credential for both the request and the cache key', async () => {
+  let resolves = 0
+  const seenAuth = []
+  const host = await createHost({
+    config: { profileFrequency: 0 },
+    resolveKey: async () => {
+      resolves += 1
+      return resolves === 1 ? 'key-a' : 'key-b'
+    },
+    fetchHandler: (url, init = {}) => {
+      if (!url.includes('/search')) return { body: {} }
+      const auth = String((init.headers && init.headers.Authorization) || '')
+      seenAuth.push(auth)
+      return { body: { results: [fact(auth.includes('key-a') ? 'account A fact' : 'account B fact')] } }
+    },
+  })
+  try {
+    const first = await runTurn(host, { sessionId: 'session-one', turn: 1 })
+    assert.match(first.text, /account A fact/)
+    const second = await runTurn(host, { sessionId: 'session-two', turn: 1 })
+    assert.match(second.text, /account B fact/)
+    assert.deepEqual(seenAuth, ['Bearer key-a', 'Bearer key-b'], 'the request used a different credential than the cache snapshot')
+    assert.equal(resolves, 2, 'the recall resolved the credential more than once')
+  } finally {
+    host.restore()
+  }
+})
+
 test('project scope matches the project id or the project name so older notes stay visible', async () => {
   const host = await createHost({
     config: { profileFrequency: 0, recallScope: 'project' },

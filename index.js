@@ -695,8 +695,10 @@ function renderFactLines(fact, settings, options = {}) {
  * @returns {Promise<any>} parsed JSON (or text).
  */
 async function api(ctx, settings, path, options = {}) {
-  const { method = 'GET', body, timeoutMs = settings.timeoutMs, signal } = options
-  const key = await resolveApiKey(ctx, settings)
+  const { method = 'GET', body, timeoutMs = settings.timeoutMs, signal, key: providedKey } = options
+  // A pre-resolved key lets one recall snapshot the credential for both the request
+  // and the cache key, so a change mid-recall cannot mislabel cached results.
+  const key = typeof providedKey === 'string' && providedKey.length > 0 ? providedKey : await resolveApiKey(ctx, settings)
   if (!key) {
     throw new Error(
       `Supermemory API key is not configured: credential reference ${settings.apiKeyRef} is empty. `
@@ -989,8 +991,11 @@ async function buildRecall(ctx, settings, query, options = {}) {
   const seen = options.seen instanceof Set ? options.seen : undefined
   const stats = options.stats || { repeats: 0 }
   const cache = options.queryCache
-  // A changed credential must not read results cached for the previous account.
-  const fingerprint = cache && typeof options.cacheFingerprint === 'string' ? options.cacheFingerprint : ''
+  // A changed credential must not read results cached for the previous account; the
+  // caller snapshots the key once per recall and the same value authenticates the
+  // requests that feed the cache.
+  const credential = typeof options.credential === 'string' ? options.credential : ''
+  const fingerprint = credential ? createHash('sha256').update(credential).digest('hex').slice(0, 16) : ''
   const cacheEnabled = Boolean(cache && fingerprint)
   const searchOne = async container => {
     const filter = container === settings.container && options.filter ? options.filter : undefined
@@ -1026,6 +1031,7 @@ async function buildRecall(ctx, settings, query, options = {}) {
         },
         timeoutMs: budget,
         signal: options.signal,
+        ...(credential ? { key: credential } : {}),
       })
       const results = Array.isArray(data && data.results) ? data.results : []
       if (cacheEnabled && cacheKey && results.length > 0) {
@@ -1536,9 +1542,12 @@ function buildTranscriptSegments(session, timeOf, captureOptions = {}) {
   const rememberPrivate = text => {
     for (const span of privateSpans(text)) {
       const inner = span.inner.trim()
-      if (inner.length < 4 || fragments.includes(inner)) continue
-      if (fragments.length >= 20) fragments.shift()
-      fragments.push(inner.slice(0, 400))
+      if (inner.length < 3 || fragments.includes(inner)) continue
+      fragments.push(inner.length > 2000 ? inner.slice(0, 2000) : inner)
+      // Bound by count and by total characters; the oldest fragments go first, so
+      // a very long session keeps only the most recently marked private text.
+      while (fragments.length > 40) fragments.shift()
+      while (fragments.reduce((total, fragment) => total + fragment.length, 0) > 20000) fragments.shift()
     }
   }
   let messages = []
@@ -1680,7 +1689,7 @@ const PLACEHOLDER_VALUE = /^(?:\[redacted[^\]]*\]|<(?:[A-Z][A-Z0-9_]*|[a-z][a-z0
  */
 function redactAssignments(text) {
   return String(text).replace(
-    /\b((?:[A-Z][A-Z0-9_]*)?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*)\b(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[^\s,;'"`<>]{8,})/g,
+    /\b((?:[A-Za-z][A-Za-z0-9_]*)?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Za-z0-9_]*)\b(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[^\s,;'"`<>]{8,})/gi,
     (match, name, separator, rawValue) => {
       const quoted = rawValue.length >= 2 && (rawValue.startsWith('"') || rawValue.startsWith("'"))
       const value = quoted ? rawValue.slice(1, -1) : rawValue
@@ -1765,7 +1774,7 @@ function redactFragments(text, fragments) {
   if (typeof text !== 'string' || fragments.length === 0) return text
   let output = text
   for (const fragment of fragments) {
-    if (typeof fragment !== 'string' || fragment.length < 4) continue
+    if (typeof fragment !== 'string' || fragment.length < 3) continue
     const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     output = output.replace(new RegExp(escaped, 'gi'), '[redacted]')
   }
@@ -1785,7 +1794,14 @@ function redactStructure(value, enabled) {
   if (Array.isArray(value)) return value.map(item => redactStructure(item, enabled))
   if (value && typeof value === 'object') {
     const output = {}
-    for (const [key, item] of Object.entries(value)) output[key] = redactStructure(item, enabled)
+    let index = 0
+    for (const [key, item] of Object.entries(value)) {
+      // A group/metadata key can itself carry a credential shape; replace such a
+      // key with a safe placeholder instead of sending it.
+      const cleanKey = redactSecrets(key, true)
+      output[cleanKey === key ? key : `redacted_key_${index}`] = redactStructure(item, enabled)
+      index += 1
+    }
     return output
   }
   return value
@@ -1812,22 +1828,6 @@ function normalizeGitRemote(remote) {
   text = text.replace(/\/+$/, '')
   const [host, ...rest] = text.split('/')
   return `${String(host).toLowerCase()}/${rest.join('/')}`.toLowerCase().replace(/\/+$/, '')
-}
-
-/**
- * Short fingerprint of the resolved credential, used to keep the recall query
- * cache from serving one account's memories after the key changed.
- * @param {object} ctx - plugin context.
- * @param {ReturnType<typeof resolveSettings>} settings - resolved settings.
- * @returns {Promise<string>} a 16-character fingerprint, or an empty string.
- */
-async function credentialFingerprint(ctx, settings) {
-  try {
-    const key = await resolveApiKey(ctx, settings)
-    return key ? createHash('sha256').update(key).digest('hex').slice(0, 16) : ''
-  } catch {
-    return ''
-  }
 }
 
 /**
@@ -2557,7 +2557,9 @@ export function apply(ctx, raw) {
         }
       }
       const stats = { repeats: 0 }
-      const cacheFingerprint = settings.recallQueryCacheMs > 0 ? await credentialFingerprint(ctx, settings) : ''
+      // Snapshot the credential once so a cover key change cannot make the cache
+      // store one account's results under another account's fingerprint.
+      const credential = settings.recallQueryCacheMs > 0 ? await resolveApiKey(ctx, settings) : ''
       const refreshProfile = settings.profileFrequency > 0
         && (payload.turn === 1 || payload.turn % settings.profileFrequency === 0)
       // Profiles refresh in parallel with the searches; on other turns the block
@@ -2614,7 +2616,7 @@ export function apply(ctx, raw) {
           queryCache: settings.recallQueryCacheMs > 0
             ? { map: recallQueryCache, ttlMs: settings.recallQueryCacheMs, sessionId }
             : undefined,
-          cacheFingerprint,
+          credential,
           seen,
           stats,
           signal: payload.signal,

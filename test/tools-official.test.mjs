@@ -225,6 +225,30 @@ test('batch save redacts context, title and group values, not only content', asy
   }
 })
 
+test('batch save replaces a credential-shaped group key instead of sending it', async () => {
+  const writes = []
+  const host = await createHost({
+    fetchHandler: (url, init = {}) => {
+      if (init.method === 'POST' && url.endsWith('/document/batch')) {
+        writes.push(JSON.parse(String(init.body)))
+        return { body: { results: [{ id: 'a', status: 'queued' }], count: 1, failed: 0 } }
+      }
+      return { body: {} }
+    },
+  })
+  try {
+    const tool = host.tools.get('supermemory_save_many')
+    await tool.execute({
+      documents: [{ content: 'a durable decision about the API gateway', group: { [`sm_${'F'.repeat(45)}`]: 'scope' } }],
+    }, signal())
+    const body = JSON.stringify(writes[0])
+    assert.equal(body.includes('sm_FFFF'), false, 'a credential-shaped key was sent')
+    assert.match(body, /redacted_key_0/)
+  } finally {
+    host.restore()
+  }
+})
+
 test('batch save validates every document before the network', async () => {
   const host = await createHost()
   try {

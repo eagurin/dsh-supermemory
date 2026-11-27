@@ -89,6 +89,7 @@ test('capture redaction covers URL credentials, JWTs and assignments but keeps p
     'DATABASE_URL=https://db.example.test/app?token=prod-secret-ABCDEF123456&x=1',
     'TOKEN=example-prod-secret-ABCDEF123456',
     'PASSWORD="<prod-secret-ABCDEF123456>"',
+    'token=lowercase-secret-value-123',
   ].join('\n')
   const redacted = redactSecrets(text, true)
   assert.equal(redacted.includes('s3cr3tpass'), false)
@@ -115,6 +116,20 @@ test('private text echoed later or repeated in a compaction summary is redacted'
   const content = plan.documents[0].content
   assert.equal(content.includes(secret), false, 'private text echoed by the model or a summary reached memory')
   assert.match(content, /please fix the deploy pipeline/)
+})
+
+test('short and long private fragments are both redacted wherever they are echoed', () => {
+  const pin = '777'
+  const longSecret = `account-${'x'.repeat(460)}-tail`
+  const messages = [
+    { ...userTurn(`<private>${pin}</private> and <private>${longSecret}</private> please proceed`), id: 'p1' },
+    answer(`confirmed ${pin} and ${longSecret}`),
+  ]
+  const plan = buildTranscriptChunks(session('session-private-size', messages), resolveSettings({ minCaptureChars: 5 }))
+  const content = plan.documents[0].content
+  assert.equal(content.includes(pin), false, 'a short private PIN was echoed into memory')
+  assert.equal(content.includes(longSecret), false, 'a long private fragment was echoed into memory')
+  assert.match(content, /please proceed/)
 })
 
 test('private fragments persist across capture calls so a later summary is still redacted', () => {
