@@ -113,7 +113,7 @@ they exposed. Every mechanism below was read from their source, not inferred fro
 
 ### Tests
 
-- 163 → **194 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
+- 163 → **197 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
   `test/tools-official.test.mjs` cover tool capture, privacy, project identity, recall
   dedupe, profile sections, discovery, query cache, project scope, batch writes, forget by
   ids, pagination, the skill, and every new setting. Existing suites were updated for the

@@ -188,6 +188,41 @@ test('the profile is rendered as stable, recent and bucket sections with an over
   }
 })
 
+test('a profile whose facts were all seen is not rendered again', async () => {
+  const profile = { profile: { static: [{ id: 'p1', memory: 'The operator prefers short answers.' }], dynamic: [], buckets: {} } }
+  const host = await createHost({
+    config: { profileFrequency: 1 },
+    fetchHandler: url => {
+      if (url.includes('/profile')) return { body: profile }
+      if (url.includes('/search')) return { body: { results: [] } }
+      return { body: {} }
+    },
+  })
+  try {
+    const first = await runTurn(host, { turn: 1 })
+    assert.match(first.text, /prefers short answers/)
+    const second = await runTurn(host, { turn: 2 })
+    assert.equal(second.injected, undefined, 'a fully seen profile produced a block again')
+  } finally {
+    host.restore()
+  }
+})
+
+test('a block emptied by dedupe does not pretend recall found nothing', async () => {
+  const host = await createHost({
+    config: { profileFrequency: 0, discoveryNotice: true },
+    fetchHandler: url => (url.includes('/search') ? { body: { results: [fact('the deploy window is Tuesday morning')] } } : { body: {} }),
+  })
+  try {
+    const first = await runTurn(host, { turn: 1 })
+    assert.match(first.text, /deploy window is Tuesday morning/)
+    const second = await runTurn(host, { turn: 2 })
+    assert.equal(second.injected, undefined, 'dedupe left an empty block or a discovery hint')
+  } finally {
+    host.restore()
+  }
+})
+
 test('an empty first recall says once that tools can search deeper', async () => {
   const host = await createHost({
     config: { profileFrequency: 0, discoveryNotice: true },

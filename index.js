@@ -1053,10 +1053,15 @@ async function buildRecall(ctx, settings, query, options = {}) {
     facts = fresh
   }
   const profileAdds = new Set()
-  const sections = containers.filter(container => {
+  // A profile counts only when it has a fact this session has not seen yet;
+  // otherwise the section would render a heading with no visible facts.
+  const profileHasFresh = container => {
     const profile = profileTexts.get(container)
-    return facts.some(fact => fact.container === container) || (profile && (profile.static.length > 0 || profile.dynamic.length > 0 || Object.keys(profile.buckets).length > 0))
-  })
+    if (!profile) return false
+    const lists = [profile.static, profile.dynamic, ...Object.values(profile.buckets)]
+    return lists.some(list => list.some(fact => !seen || !seen.has(factHash(fact))))
+  }
+  const sections = containers.filter(container => facts.some(fact => fact.container === container) || profileHasFresh(container))
   const complete = facts.length > 0 || sections.length > 0
   const noticeLine = settings.recallFailureNotice === false ? '' : recallNotice(failures, complete)
   const captureLine = settings.captureFailureNotice === false || !options.captureNotice ? '' : `- ${options.captureNotice}`
@@ -1082,10 +1087,7 @@ async function buildRecall(ctx, settings, query, options = {}) {
   // Profiles share one budget and cannot take more than half of the block; each
   // profile also takes at most half of its own section, so the query-specific facts
   // that share that section always keep room.
-  const profileContainers = sections.filter(container => {
-    const profile = profileTexts.get(container)
-    return profile && (profile.static.length > 0 || profile.dynamic.length > 0 || Object.keys(profile.buckets).length > 0)
-  })
+  const profileContainers = sections.filter(profileHasFresh)
   const profileTotal = Math.max(200, Math.min(settings.profileMaxChars, Math.floor(bodyBudget / 2)))
   const profileCap = Math.max(120, Math.floor(sectionBudget / 2))
   const profileShare = profileContainers.length > 0
@@ -2492,7 +2494,7 @@ export function apply(ctx, raw) {
         // would otherwise disable memory forever with no signal at all.
         log('warn', `recall failed: ${recallFailures[0]}`)
       }
-      if (!block && recallFailures.length === 0 && settings.discoveryNotice && !discoverySent.has(sessionId) && !payload.signal.aborted) {
+      if (!block && recallFailures.length === 0 && stats.repeats === 0 && settings.discoveryNotice && !discoverySent.has(sessionId) && !payload.signal.aborted) {
         // Nothing matched and nothing failed: say once that tools can search deeper.
         discoverySent.add(sessionId)
         if (discoverySent.size > 200) {
@@ -2502,6 +2504,13 @@ export function apply(ctx, raw) {
         block = discoveryBlock(settings, readable)
       }
       if (!block || payload.signal.aborted) return decision
+      // Any injected block (facts, profile or a notice) means memory is visibly in
+      // play: a later empty recall should not claim that nothing was found.
+      discoverySent.add(sessionId)
+      if (discoverySent.size > 200) {
+        const oldestDiscovery = discoverySent.values().next().value
+        if (oldestDiscovery !== undefined) discoverySent.delete(oldestDiscovery)
+      }
 
       if (recalledTurns.size > 200) {
         const oldest = recalledTurns.keys().next().value
