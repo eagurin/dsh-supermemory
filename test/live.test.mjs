@@ -70,20 +70,30 @@ before(async () => {
   // inventory pages: checking only the first page would miss a match beyond it and
   // then delete that namespace in cleanup.
   try {
-    suiteSafe = true
+    let conclusive = false
     const seen = new Set()
     for (let page = 1; page <= 50; page += 1) {
       const chunk = await raw('GET', `/ns?limit=100&page=${page}`)
       const names = (chunk.namespaces || []).map(entry => entry.namespace)
       if (names.includes(container)) {
+        conclusive = true
         suiteSafe = false
         break
       }
-      if (names.length === 0 || seen.has(names[0])) break
+      if (names.length === 0 || seen.has(names[0])) {
+        conclusive = true
+        break
+      }
       seen.add(names[0])
       const totalPages = chunk.pagination && Number.isFinite(chunk.pagination.totalPages) ? chunk.pagination.totalPages : 1
-      if (page >= totalPages) break
+      if (page >= totalPages) {
+        conclusive = true
+        break
+      }
     }
+    // More namespaces than the page cap: absence cannot be proven, so refuse.
+    suiteSafe = conclusive && suiteSafe !== false
+    if (!conclusive) suiteSafe = false
   } catch {
     suiteSafe = false
   }

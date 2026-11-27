@@ -19,10 +19,12 @@ Does:
   credential store (`$DSH_HOME/.credentials.yaml`) and is resolved per request.
 - **The key never appears in logs or errors.** The plugin never interpolates it; errors
   name the reference and the endpoint. A failed request reports the endpoint, the HTTP
-  status, and — only when the server sends an identifier-shaped `code` — that code, plus a
-  fixed hint for common statuses. **Server error bodies are never relayed**, so an endpoint
-  that echoes the `Authorization` header or writes instructions cannot put either into the
-  model context. The key is never sent anywhere except as the `Authorization` header to
+  status, and — only when the server sends an identifier-shaped `code` that does not
+  contain the key — that code, plus a fixed hint for common statuses. **Server error bodies
+  are never relayed**, so an endpoint that echoes the `Authorization` header or writes
+  instructions cannot put either into the model context. Refusal entries are rendered as
+  ids and codes only: a bare string entry that is not identifier-shaped is reported as an
+  unidentified entry, never echoed. The key is never sent anywhere except as the `Authorization` header to
   `baseUrl`.
 - **Agent isolation by default.** The plugin writes only to its own namespace.
   Another agent's namespaces are readable only when explicitly listed in

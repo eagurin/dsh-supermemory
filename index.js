@@ -660,7 +660,7 @@ async function api(ctx, settings, path, options = {}) {
       }
     }
     if (!response.ok) {
-      const code = safeErrorCode(data)
+      const code = safeErrorCode(data, key)
       const error = new Error(`Supermemory ${method} ${path} failed with ${response.status}${code ? ` (${code})` : ''}: ${statusHint(response.status)}`)
       error.status = response.status
       throw error
@@ -709,7 +709,7 @@ function statusHint(status) {
  * @param {any} data - parsed error body.
  * @returns {string} a safe code such as `api_key_expired`, or an empty string.
  */
-function safeErrorCode(data) {
+function safeErrorCode(data, apiKey) {
   if (!data || typeof data !== 'object') return ''
   const candidates = [
     data.code,
@@ -717,7 +717,10 @@ function safeErrorCode(data) {
     data.error && !Array.isArray(data.error) && typeof data.error === 'object' ? data.error.code : undefined,
   ]
   for (const candidate of candidates) {
-    if (typeof candidate === 'string' && /^[A-Za-z0-9_.-]{1,40}$/.test(candidate)) return candidate
+    if (typeof candidate !== 'string' || !/^[A-Za-z0-9_.-]{1,40}$/.test(candidate)) continue
+    // An identifier-shaped key could arrive back as a `code`; never echo it.
+    if (typeof apiKey === 'string' && apiKey.length >= 4 && candidate.includes(apiKey)) continue
+    return candidate
   }
   return ''
 }
@@ -1698,7 +1701,7 @@ async function apiMultipart(ctx, settings, path, form, signal) {
       }
     }
     if (!response.ok) {
-      const code = safeErrorCode(data)
+      const code = safeErrorCode(data, key)
       const error = new Error(`Supermemory POST ${path} failed with ${response.status}${code ? ` (${code})` : ''}: ${statusHint(response.status)}`)
       error.status = response.status
       throw error
@@ -1746,7 +1749,11 @@ async function deleteDocuments(ctx, settings, container, ids) {
       // retried on the next flush instead of being forgotten.
       const errors = Array.isArray(data && data.errors) ? data.errors : []
       for (const entry of errors) {
-        if (entry && typeof entry.id === 'string') failed.push({ id: entry.id, reason: String(entry.error || 'delete refused') })
+        if (!entry || typeof entry.id !== 'string') continue
+        // The reason is logged, not shown to the model, but it still must not carry
+        // arbitrary server text: keep a safe code or a fixed class.
+        const reason = safeErrorCode(entry) || 'refused by the server'
+        failed.push({ id: entry.id, reason })
       }
     } catch (error) {
       // A 404 means the documents are already gone: not an error worth a retry.
@@ -2651,7 +2658,9 @@ export function apply(ctx, raw) {
         // Refusals are server-controlled: show which id was refused and a safe code,
         // never the free-text message.
         if (typeof error === 'string') {
-          lines.push(`- refused: ${sanitizeShort(error, 120)}`)
+          // A bare string entry is server text (it can echo the key or instructions);
+          // only an identifier-shaped value is safe to show.
+          lines.push(`- refused: ${/^[A-Za-z0-9_.:-]{1,120}$/.test(error) ? error : '(unidentified entry)'}`)
           continue
         }
         const id = error && typeof error.id === 'string' ? sanitizeShort(error.id, 120) : '(unknown id)'
