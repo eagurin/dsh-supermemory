@@ -55,9 +55,10 @@ deliberate argument or field omission; **not used** — explained, with the reas
 | 15 | `/ns/{ns}` | `GET`, `PATCH`, `DELETE` | `supermemory_namespace` actions `show`, `context`, `delete` | used (`moveTo` deliberately omitted) | `security`, `profile-list-namespace` |
 | 16 | `/organization` | `GET`, `PATCH` | — | **not used by design**: organization-wide context steers memory formation in *every* namespace, including another agent's. Writing it from an agent plugin would silently change how Hermes' memory is extracted; the plugin's contract is per-namespace. | — |
 
-So: 13 of 16 paths are reachable, 1 is covered by an equivalent route, and 2 are
-deliberately out of scope for stated reasons. `document/batch`, `document/file/{id}`
-and `organization` are the only paths with no plugin surface.
+So: 12 of 16 paths have a direct plugin surface, 1 (`/namespaces`) is covered by its
+equivalent route `/ns`, and 3 are deliberately out of scope for stated reasons:
+`document/batch`, `document/file/{id}` and `organization` are the only paths with no
+plugin surface.
 
 ## Search: every documented parameter
 
