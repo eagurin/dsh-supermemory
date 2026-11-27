@@ -569,7 +569,7 @@ behaviour.
 - **Ingest status.** `supermemory_save` now waits up to `ingestWaitMs` (1.5 s by
   default) and reports `queued` / `processing` / `done` / `failed`;
   `supermemory_read_document` and `supermemory_list` show the stored status too.
-- **Unit tests** (`node --test test/`, 32 cases) over the pure helpers — settings
+- **Unit tests** (`npm test`, 32 cases) over the pure helpers — settings
   normalization, filter validation, container naming, text budgets, and transcript
   capture — plus a schema test that validates the configuration used on this
   machine. CI runs them.

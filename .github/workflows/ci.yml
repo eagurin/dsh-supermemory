@@ -24,4 +24,7 @@ jobs:
       - name: Manifest, patch, locales, docs, and secrets
         run: node scripts/check.mjs
       - name: Unit tests
-        run: node --test test/
+        # `node --test test/` treats the directory as a module on Node 22; the
+        # package script passes explicit test files instead, so CI and a local
+        # `npm test` run exactly the same command.
+        run: npm test

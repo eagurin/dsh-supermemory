@@ -211,7 +211,7 @@ supermemory_buckets → action: set, buckets: {"decisions": "Решения вл
 ```bash
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs
-node --test test/     # 163 случаев; 5 live-случаев пропускаются без временного namespace
+npm test              # 163 случаев; 5 live-случаев пропускаются без временного namespace
 ```
 
 Живая проверка после установки: `supermemory_namespaces` показывает сервер и ваш namespace;

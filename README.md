@@ -264,7 +264,7 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-node --test test/           # 163 cases (5 live cases skip without a temporary namespace);
+npm test                     # 163 cases (5 live cases skip without a temporary namespace);
                             # without the line above, 3 Config tests skip
 ```
 
