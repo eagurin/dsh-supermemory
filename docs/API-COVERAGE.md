@@ -159,6 +159,6 @@ not applied automatically.
 | Recall hook (notice, relations, profile budget, scheduled turns) | `test/recall.test.mjs` |
 | Capture and save write path (date, group, dreaming, metadata) | `test/write-path.test.mjs` |
 | Profile, list, namespaces, namespace show | `test/profile-list-namespace.test.mjs` |
-| Security invariants, redaction, upload policy | `test/security.test.mjs` |
+| Security invariants, redaction, upload policy, sanitizer, error relay, capture ownership | `test/security.test.mjs` |
 | Capture chunking and regressions | `test/chunks.test.mjs`, `test/regressions.test.mjs` |
 | Real server (opt-in, temporary namespace) | `test/live.test.mjs` |

@@ -25,11 +25,31 @@ const container = process.env.DSH_SM_LIVE_CONTAINER || ''
 const apiKey = process.env.SUPERMEMORY_API_KEY || ''
 const baseUrl = process.env.DSH_SM_LIVE_BASE_URL || 'http://127.0.0.1:6767'
 const LIVE = /^dsh-audit-\d{8}-\d{4}$/.test(container) && apiKey.length > 0
-const maybe = LIVE ? test : test.skip
 const guard = message => { if (!LIVE) throw new Error(message) }
 
 let host
+let suiteSafe = false
+let created = false
 const written = []
+
+/**
+ * Run a live check only when the suite may touch the server: it is enabled and the
+ * temporary namespace did not already exist. Otherwise the test is skipped, so a
+ * mistyped or reused name can never be written into and then deleted.
+ */
+function maybe(name, fn) {
+  test(name, async t => {
+    if (!LIVE) {
+      t.skip('live suite is not enabled (set DSH_SM_LIVE_CONTAINER and SUPERMEMORY_API_KEY)')
+      return
+    }
+    if (!suiteSafe) {
+      t.skip(`refusing to touch \`${container}\`: it already existed before the suite started`)
+      return
+    }
+    await fn(t)
+  })
+}
 
 /** Read the server directly for the few checks that are not a tool call. */
 async function raw(method, path, body) {
@@ -46,6 +66,15 @@ async function raw(method, path, body) {
 
 before(async () => {
   if (!LIVE) return
+  // A pre-existing namespace is not this suite's to write into or delete.
+  try {
+    const existing = await raw('GET', '/ns?limit=100')
+    const names = (existing.namespaces || []).map(entry => entry.namespace)
+    suiteSafe = !names.includes(container)
+  } catch {
+    suiteSafe = false
+  }
+  if (!suiteSafe) return
   host = await createHost({
     realNetwork: true,
     apiKey,
@@ -67,9 +96,10 @@ before(async () => {
 after(async () => {
   if (!LIVE) return
   try {
-    // The plugin refuses to delete its own namespace on purpose, so the live
-    // fixture removes its temporary namespace directly.
-    await raw('DELETE', `/ns/${encodeURIComponent(container)}`)
+    // Only a namespace this run created is removed, and only after the first write
+    // actually happened: the plugin refuses to delete its own namespace on purpose,
+    // so the fixture does it directly.
+    if (suiteSafe && created) await raw('DELETE', `/ns/${encodeURIComponent(container)}`)
   } catch {
     // Already gone is fine.
   }
@@ -80,6 +110,7 @@ maybe('live: a dated, grouped document is accepted and then listed', async (t) =
   const tool = host.tools.get('supermemory_save')
   const documentId = `audit-${Date.now()}`
   written.push(documentId)
+  created = true
   const saved = await tool.execute({
     content: 'Live audit note. Decision: the deploy window for project audit-project is Tuesday 09:00.',
     documentId,

@@ -18,9 +18,12 @@ Does:
   credential reference (`SUPERMEMORY_API_KEY`); the value lives in the Host
   credential store (`$DSH_HOME/.credentials.yaml`) and is resolved per request.
 - **The key never appears in logs or errors.** The plugin never interpolates it; errors
-  name the reference and the endpoint. Server-provided error text is relayed up to 400
-  characters, so a hostile proxy could echo anything it chooses — the key is never sent
-  anywhere except as the `Authorization` header to `baseUrl`.
+  name the reference and the endpoint. Server-provided error text is redacted (credential
+  shapes become `[redacted]`), neutralized to one line without control characters or block
+  shapes, and capped at 300 characters; arbitrary `details` are not relayed. A hostile
+  proxy can still put instruction text into an error, so tool errors remain untrusted data,
+  but it cannot make the plugin print the credential back in a recognizable form. The key
+  is never sent anywhere except as the `Authorization` header to `baseUrl`.
 - **Agent isolation by default.** The plugin writes only to its own namespace.
   Another agent's namespaces are readable only when explicitly listed in
   `readContainers` or matched by `readPrefixes` (both empty by default), `writeContainers`
@@ -28,9 +31,14 @@ Does:
   `allowWritesToReadContainers` never extends to one, and namespace deletion is an
   allowlist of writable namespaces with no `moveTo`.
 - **Recalled text cannot forge its own block.** The recall block is delimited by a
-  fresh random nonce per turn; control characters, the legacy `<supermemory-context>`
-  tag, forged `<<<supermemory-…>>>` shapes and leading `##` heading markers are stripped
-  from recalled facts and profile text before they are shown.
+  fresh random nonce per turn; control characters (including bare carriage returns, which
+  Markdown also treats as line endings), the legacy `<supermemory-context>` tag, forged
+  `<<<supermemory-…>>>` shapes and leading `##` heading markers are stripped from recalled
+  facts and profile text before they are shown. `supermemory_read_document` keeps the
+  document body exact but wraps it in its own nonce-delimited region with a warning line.
+- **Capture only retires documents it wrote.** Deleting a legacy single document requires
+  re-reading it and matching this plugin's `session_id` and agent metadata first, so a
+  saved note that happens to share the id is left alone.
 - **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`,
   `Bearer …`, PEM blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a
   transcript is sent.

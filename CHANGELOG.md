@@ -84,10 +84,27 @@ actions, upload policy) are unchanged and still tested.
   anything else rendered as `related`).
 - Recall notices and history excerpt failures are classified, not relayed: server error
   text can no longer reach the model through those paths.
-- Filter and group validation keeps rejecting bad shapes before any request and never
-  echoes argument values.
-- `supermemory_read_document` now states in its description that the document text is
-  untrusted recalled material.
+- Filter and group validation keeps rejecting bad shapes before any request and now never
+  echoes the rejected field, operator, key, or JSON input (the JSON parser's own message
+  could quote the input, so it is no longer included).
+- **Server error bodies are redacted and neutralized** before they become a tool error:
+  credential shapes are replaced, the text is reduced to one line, and arbitrary `details`
+  are dropped (300-character cap). A hostile endpoint can still write instruction text into
+  an error — tool errors stay untrusted — but it cannot make the plugin echo the key shape.
+- **`supermemory_read_document` sanitizes its header and frames the document body** in its
+  own nonce-delimited region with a warning line; the body stays exact for quotations.
+- **Capture only retires documents it can prove it wrote.** Before deleting a legacy single
+  document of a session, the plugin re-reads it and requires this plugin's `session_id` and
+  agent metadata, so a note saved under a colliding id is never removed.
+- **The sanitizer treats a bare carriage return as a line break** (Markdown does) and its
+  heading pass no longer backtracks across newlines: CR-injected headings are neutralized
+  and hostile newline runs stay linear.
+- **Capture bookkeeping only evicts idle session state** and clears the timer handle when it
+  fires, so eviction cannot leave live timers behind an untracked session; namespace
+  inventory listings are clamped with an explicit truncation marker.
+- **The opt-in live suite refuses a pre-existing namespace**: it checks that
+  `dsh-audit-<YYYYMMDD-HHMM>` did not exist before writing, records whether this run created
+  it, and only then deletes it.
 
 ### Documentation
 
@@ -111,7 +128,7 @@ actions, upload policy) are unchanged and still tested.
 
 ### Tests
 
-- 101 → 149 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
+- 101 → 158 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
   `test/recall.test.mjs`, `test/write-path.test.mjs`,
   `test/profile-list-namespace.test.mjs`, plus an opt-in `test/live.test.mjs` that writes
   only into a `dsh-audit-<YYYYMMDD-HHMM>` namespace, reads real memories from `dsh` to

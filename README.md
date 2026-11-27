@@ -223,8 +223,9 @@ supermemory_buckets → action: set, buckets: {"decisions": "Decisions the opera
 What the plugin guarantees:
 
 - **No secrets in this repository**, and the API key never appears in logs, errors, or tool output
-  (tool results do return stored memory text, and server error text is relayed up to 400 characters).
-  The key is resolved per request from the credential store.
+  (tool results do return stored memory text; server error text is redacted, neutralized to one
+  line, and capped at 300 characters, and a hostile body's `details` are not relayed). The key is
+  resolved per request from the credential store.
 - **Writes stay inside your namespaces.** `writeContainers` cannot name a Hermes namespace, and
   `allowWritesToReadContainers` never extends to one. Namespace deletion is an allowlist: only a
   namespace this agent may write can be deleted, never its own, and there is no `moveTo`.
@@ -233,6 +234,11 @@ What the plugin guarantees:
   `<supermemory-context>` tag, and leading `##` heading markers before it is shown.
 - **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`, `Bearer …`, PEM
   blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a transcript is sent.
+- **Capture only retires documents it wrote.** Before deleting the legacy single document of a
+  session, the plugin re-reads it and requires its own `session_id` and agent metadata, so a note
+  saved under a colliding id is never removed.
+- **Document text is framed as untrusted.** `supermemory_read_document` sanitizes its header and
+  wraps the (otherwise exact) body in its own nonce-delimited region with a warning line.
 - **Uploads are off by default** and confined to `uploadRoots`; the file must have a single hard
   link, is opened with `O_NOFOLLOW` where the platform provides it (Windows falls back to a plain
   open after the link check), and is read through that descriptor with a byte cap.
@@ -257,7 +263,7 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-node --test test/           # 149 cases (5 live cases skip without a temporary namespace);
+node --test test/           # 158 cases (5 live cases skip without a temporary namespace);
                             # without the line above, 3 Config tests skip
 ```
 
@@ -275,7 +281,7 @@ SUPERMEMORY_API_KEY="$(cat ~/.supermemory/api-key)" \
 node --test test/live.test.mjs
 ```
 
-It refuses any other namespace name. On a self-hosted server whose extraction model is unavailable
+It refuses any other namespace name and refuses a namespace that already existed before the run. On a self-hosted server whose extraction model is unavailable
 (`memory agent failed` in the server log) documents are written and searchable as chunks but new
 memories do not form; the extraction-dependent checks then report that explicitly instead of
 passing.

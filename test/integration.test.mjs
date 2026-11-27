@@ -60,6 +60,10 @@ test('a long turn is captured as parts and the earlier single document is delete
         return { body: { id: 'x', status: 'queued' } }
       }
       if (init.method === 'PATCH') return { status: 404, body: { error: 'Document not found' } }
+      if (init.method === 'GET' && url.endsWith('/document/dsh-session-int-2')) {
+        // Capture retirement only deletes a document it can prove it wrote.
+        return { body: { id: 'dsh-session-int-2', metadata: { session_id: 'session-int-2', sm_source: 'dsh', source_agent: 'deepseek-harness' } } }
+      }
       if (init.method === 'DELETE' && url.endsWith('/document')) {
         deletes.push(JSON.parse(body))
         return { body: { count: 0, errors: [] } }

@@ -214,6 +214,9 @@ test('a document the server refuses to delete is retried, not forgotten', async 
       const method = init.method || 'GET'
       if (method === 'PATCH') return { status: 404, body: { error: 'Document not found' } }
       if (method === 'POST') return { body: { id: 'x', status: 'queued' } }
+      if (method === 'GET' && url.endsWith('/document/dsh-session-retry')) {
+        return { body: { id: 'dsh-session-retry', metadata: { session_id: 'session-retry', sm_source: 'dsh', source_agent: 'deepseek-harness' } } }
+      }
       if (method === 'DELETE') {
         deletes.push(JSON.parse(String(init.body)).ids)
         return { body: { count: 0, errors: [{ id: 'dsh-session-retry', error: 'Document is still processing' }] } }
