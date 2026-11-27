@@ -64,36 +64,56 @@ async function raw(method, path, body) {
   return text ? JSON.parse(text) : undefined
 }
 
+/**
+ * Decide one page of the namespace preflight.
+ * @param {string} target - temporary namespace name.
+ * @param {Set<string>} seenFirsts - first names of earlier pages, to detect a loop.
+ * @param {string[]} names - namespaces on this page.
+ * @param {number} totalPages - pagination totalPages for this page.
+ * @param {number} page - one-based page just fetched.
+ * @returns {'unsafe' | 'safe' | 'continue'} the decision, or 'inconclusive'-style continue.
+ */
+function pageVerdict(target, seenFirsts, names, totalPages, page) {
+  if (names.includes(target)) return 'unsafe'
+  if (names.length === 0 || seenFirsts.has(names[0])) return 'safe'
+  if (page >= totalPages) return 'safe'
+  return 'continue'
+}
+
+test('the live preflight cannot mistake a page-capped inventory for an absent namespace', () => {
+  const target = 'dsh-audit-20260101-1200'
+  assert.equal(pageVerdict(target, new Set(), ['other'], 1, 1), 'safe')
+  assert.equal(pageVerdict(target, new Set(), [target], 1, 1), 'unsafe')
+  assert.equal(pageVerdict(target, new Set(), [], 9, 3), 'safe')
+  assert.equal(pageVerdict(target, new Set(['a']), ['a'], 9, 2), 'safe')
+  assert.equal(pageVerdict(target, new Set(), ['a'], 9, 1), 'continue')
+})
+
 before(async () => {
   if (!LIVE) return
   // A pre-existing namespace is not this suite's to write into or delete. The
   // inventory pages: checking only the first page would miss a match beyond it and
   // then delete that namespace in cleanup.
   try {
-    let conclusive = false
+    let safe = false
     const seen = new Set()
     for (let page = 1; page <= 50; page += 1) {
       const chunk = await raw('GET', `/ns?limit=100&page=${page}`)
       const names = (chunk.namespaces || []).map(entry => entry.namespace)
-      if (names.includes(container)) {
-        conclusive = true
-        suiteSafe = false
+      const totalPages = chunk.pagination && Number.isFinite(chunk.pagination.totalPages) ? chunk.pagination.totalPages : 1
+      const verdict = pageVerdict(container, seen, names, totalPages, page)
+      if (verdict === 'unsafe') {
+        safe = false
         break
       }
-      if (names.length === 0 || seen.has(names[0])) {
-        conclusive = true
+      if (verdict === 'safe') {
+        safe = true
         break
       }
       seen.add(names[0])
-      const totalPages = chunk.pagination && Number.isFinite(chunk.pagination.totalPages) ? chunk.pagination.totalPages : 1
-      if (page >= totalPages) {
-        conclusive = true
-        break
-      }
     }
-    // More namespaces than the page cap: absence cannot be proven, so refuse.
-    suiteSafe = conclusive && suiteSafe !== false
-    if (!conclusive) suiteSafe = false
+    // Hitting the page cap without a conclusion means absence is unproven: refuse.
+    suiteSafe = safe
   } catch {
     suiteSafe = false
   }
