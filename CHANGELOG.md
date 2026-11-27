@@ -4,6 +4,131 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-11-28
+
+This release closes the gap between the Supermemory v5 API and what the plugin exposed:
+the engine already kept dated, versioned, linked facts, and the bundle was not reading
+them. Nothing here weakens the existing contract — new parameters are optional, every
+default reproduces 0.7.0 behaviour, and the security invariants (nonce-delimited recall,
+`sanitizeUntrusted`, `redactSecrets`, own-namespaces-only writes, two-step destructive
+actions, upload policy) are unchanged and still tested.
+
+### Added — full read path
+
+- **`supermemory_search` uses the whole v5 search contract.** New optional parameters:
+  `includeRelated` (graph relations), `includeForgotten` (replaced/expired memories),
+  `includeDocuments` (source document id, title, date, summary), `threshold`, `rerank`,
+  and a typed `filter` accepted as an object or JSON text. `limit` now accepts the API's
+  1–100 range instead of 1–20. Results are rendered with a `YYYY-MM-DD` date, a
+  `superseded` / `inferred` / `forgotten` marker, the memory id, and up to three
+  compact relation lines (`updates v1 (earlier, 2026-10-01): …`).
+- **New tool `supermemory_memory_history`** over `GET /ns/{ns}/memories/{id}`:
+  `memoryId` (required), `includeVersions` (default true), `relatedLimit` (1–10, default
+  3), `includeDocument` (default false). It renders the current text, version, state
+  (`latest` / `not the latest version`, `forgotten`, `inferred`, `stable profile fact`),
+  created/updated timestamps, the version chain nearest first, `extends`/`derives` links,
+  the source document, and an optional bounded excerpt. It is read-only and subject to
+  the same readable-namespace policy as every other read. The tool list is now eleven.
+- **Recall can carry evolution and admits its own failures.** `recallIncludeRelated`
+  (default false) puts one relation line per fact into the recall block;
+  `recallRerank` (default `inherit`, follows `rerank`) separates recall ranking from tool
+  ranking; and `recallFailureNotice` (default true) inserts an explicit
+  `memory recall unavailable (timeout) — proceed without memory` (or
+  `memory recall incomplete (…) — some namespaces were not searched`) line, so a lost
+  recall is visible instead of looking like a short profile. Failure reasons are
+  classified (`timeout` / `unreachable` / `not configured` / `error`), never echoed from
+  server text.
+- **Recall facts carry dates and state**, and the block budget is now split: the profile
+  is capped by `profileMaxChars` shared across namespaces and may not take more than half
+  the block, so a long profile can no longer crowd out the answer to the actual question.
+
+### Added — write path
+
+- **Captures are dated by the session, not by the write.** The plugin records the
+  session-start event time and each user message's event time, and sends `date` as the
+  session start for a single document or the earliest turn of each part. When no
+  timestamp was observed, `date` is omitted rather than invented.
+- **Captures and saves carry a context `group`** (`{project: <workspace base name>,
+  kind: "conversation" | "file"}`) and metadata `project` / `kind` in addition to the
+  existing keys, so later searches and list calls can filter on them. The full workspace
+  path keeps its existing `workspace` metadata key; the group never contains a path.
+- **`taskType: "memory"` is explicit** on capture, save, and upload, and
+  **`dreaming` now means the same thing on `POST` and `PATCH`.** New `captureDreaming`
+  (default `inherit`, follows `dreaming`, so 0.7.0 configurations behave identically)
+  separates the processing mode of automatic capture from explicit saves; `dynamic`
+  groups related documents for better context at the cost of latency (measured ~9
+  minutes on the reference self-hosted stack, where `instant` is immediate and bills one
+  extra operation per document). New `captureContext` (default empty) sends a bounded
+  `supportingContext` with captures.
+- **`supermemory_save` accepts `date` and `group`** and validates them before any network
+  I/O; `supermemory_upload_file` sends `taskType`, `date`, and a file group as form
+  fields.
+
+### Added — profile, list, namespaces
+
+- **`supermemory_profile` accepts `buckets` and a metadata `filter`**, and its facts are
+  now passed through `sanitizeUntrusted` (a profile fact could previously inject a
+  heading or the legacy context tag into a tool result).
+- **`supermemory_list` covers the whole listing contract**: `chunks` in addition to
+  documents and memories, `sort` (`createdAt` / `updatedAt` / `position`), `order`,
+  `filter`, `includeForgotten`, and a 1–100 page size.
+- **`supermemory_namespaces` and `supermemory_namespace action:list` accept `page` /
+  `limit`** and report the total; new **`supermemory_namespace action:show`** reads a
+  readable namespace's `supportingContext` without writing.
+
+### Security
+
+- New model-visible surfaces (relations, related ids, document summaries, history text,
+  document excerpts, list metadata, namespace context) go through `sanitizeUntrusted` and
+  fixed-length bounds; relation names are allowlisted (`updates` / `extends` / `derives`,
+  anything else rendered as `related`).
+- Recall notices and history excerpt failures are classified, not relayed: server error
+  text can no longer reach the model through those paths.
+- Filter and group validation keeps rejecting bad shapes before any request and never
+  echoes argument values.
+- `supermemory_read_document` now states in its description that the document text is
+  untrusted recalled material.
+
+### Documentation
+
+- New [docs/API-COVERAGE.md](docs/API-COVERAGE.md): all 16 paths of the local v5
+  OpenAPI and every significant search/document/profile/list/namespace parameter are
+  mapped to a tool or a deliberate omission with a reason, plus the test that covers it.
+  It also records where the official docs and the local OpenAPI differ.
+- Both READMEs document the new defaults, the new tool, example questions ("what did I
+  decide about X", "how did my position change", "which decisions were made and when"),
+  the optional starter buckets, the live-suite command, and the `dreaming` trade-off
+  honestly.
+
+### Compatibility
+
+- All new tool parameters are optional and every new setting defaults to the 0.7.0
+  behaviour (`recallRerank` and `captureDreaming` inherit the settings that used to drive
+  those paths). Configuration keys were not renamed or removed; unknown keys still fail
+  loudly. No new dependencies were added (runtime remains `node:` builtins plus
+  `@deepseek-ai/schemastery`).
+- The release tag and any push are the operator's action and are not part of this change.
+
+### Tests
+
+- 101 → 148 cases: new `test/search.test.mjs`, `test/history.test.mjs`,
+  `test/recall.test.mjs`, `test/write-path.test.mjs`,
+  `test/profile-list-namespace.test.mjs`, plus an opt-in `test/live.test.mjs` that writes
+  only into a `dsh-audit-<YYYYMMDD-HHMM>` namespace, reads real memories from `dsh` to
+  exercise the history tool, and deletes the temporary namespace afterwards. The live
+  cases skip unless that namespace and a key are supplied explicitly.
+- Live verification on the reference self-hosted server (0.0.9): a dated, grouped
+  document was written, `date` was stored as `metadata.temporalContext.documentDate`,
+  metadata and group reached the server, `include.related` / `include.documents` /
+  `include.forgotten` responses were accepted and rendered with dates, metadata filters
+  matched documents (54 total vs 36 for `type: conversation`), profile buckets and a
+  filtered profile were read, and `supermemory_memory_history` returned a real version-2
+  memory with two `updates` parents and a source-document excerpt. During the audit the
+  server's own extraction phase was unavailable (its log said the `gpt-6-luna` credential
+  pool was cooling down), so freshly written documents produced chunks but no new
+  memories or version chains; that part of the live path remains to be observed on a
+  server with a working extraction model, and the live suite reports it explicitly.
+
 ## [0.7.0] — 2026-11-25
 
 ### Changed

@@ -135,7 +135,7 @@ test('defineTool emits an object-rooted JSON Schema and validates required argum
 test('every registered tool ships a real JSON Schema with its required list', async () => {
   const host = await createHost()
   try {
-    assert.equal(host.tools.size, 10)
+    assert.equal(host.tools.size, 11)
     for (const [name, tool] of host.tools) {
       assert.equal(tool.parameters.type, 'object', `${name} is not object-rooted`)
       assert.ok(tool.parameters.properties, `${name} has no properties`)
@@ -143,6 +143,10 @@ test('every registered tool ships a real JSON Schema with its required list', as
     }
     const search = host.tools.get('supermemory_search')
     assert.deepEqual(search.parameters.required, ['query'])
+    const history = host.tools.get('supermemory_memory_history')
+    assert.deepEqual(history.parameters.required, ['memoryId'])
+    assert.equal(history.parameters.properties.includeVersions.type, 'boolean')
+    assert.equal(history.parameters.properties.relatedLimit.maximum, 10)
   } finally {
     host.restore()
   }

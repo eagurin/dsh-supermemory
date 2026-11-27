@@ -11,9 +11,19 @@
 - **Recall перед ходом.** Последний вопрос ищется до первого шага, найденные факты вставляются в блоке
   с одноразовым маркером (nonce) на каждый ход.
 - **Capture после хода.** Сессия перезаписывается как один документ (`dsh-<sessionId>`) или, если не
-  влезает, как части `dsh-<sessionId>-p1…pN`; части обновляются на месте.
-- **Десять инструментов**: search, profile, save, forget, read_document, list, namespaces,
-  upload_file, namespace, buckets.
+  влезает, как части `dsh-<sessionId>-p1…pN`; части обновляются на месте. У документа есть настоящая
+  дата (начало сессии, для части — её самый ранний ход) и группа контекста, поэтому «когда я это
+  сказал» не теряется даже при поздней или возобновлённой записи.
+- **Полный путь чтения v5.** `supermemory_search` отдаёт `include.related`, `include.documents`,
+  `include.forgotten`, `rerank`, `threshold` и типизированный `filter`; результаты несут дату и
+  состояние `superseded` / `inferred` / `forgotten`, а не только текст.
+- **История памяти.** `supermemory_memory_history` читает одну память по id: цепочку версий,
+  связи `extends`/`derives`, даты и при желании фрагмент исходного документа — то есть эволюцию
+  позиции, а не только её последнюю формулировку.
+- **Одиннадцать инструментов**: search, memory_history, profile, save, forget, read_document, list,
+  namespaces, upload_file, namespace, buckets.
+- **Честный recall.** Если recall не успел, блок прямо говорит об этом
+  (`memory recall unavailable (timeout) — proceed without memory`), а не отдаёт молча только профиль.
 
 ## Что нужно
 
@@ -52,17 +62,17 @@ node scripts/setup.mjs --json          # машинный план (код 3 и 
 1. **Попросить агента** (работает сразу): сказать ему установить бандл
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0
    ```
 
 2. **GUI**: *Plugins → Add plugin* — вставьте
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0` в поле **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0` в поле **Package name or address**.
 
 3. **CLI**, если есть Node 22+ и сеть (профиль `desktop` должен уже существовать, приложение — быть
    полностью закрыто, `pnpm` — быть в `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0"
    ```
 
 Бандл сам вставляет свой `cordis.patch.yml`, вручную строку писать не нужно. Обычный
@@ -114,11 +124,40 @@ refs:
 | `maxCaptureChars` | `120000` | Предел тела транскрипта; больше — режется на части (к документу добавляется короткий заголовок). |
 | `captureTurnsPerChunk` | `25` | Ходов в одной части (минимум 1). |
 | `filter` | `""` | Фильтр по метаданным (JSON) для recall в своём namespace. |
-| `rewriteQuery` | `false` | Сервер переформулирует запрос (+2–3 с). |
+| `recallIncludeRelated` | `false` | Показывать в recall-блоке связи (`updates`/`extends`/`derives`); по одной связи на факт. |
+| `recallRerank` | `inherit` | Reranking для recall-поиска; `inherit` берёт значение `rerank`. |
+| `recallFailureNotice` | `true` | Явная строка `memory recall unavailable (…)` в блоке, если recall упал или не успел. |
+| `dreaming` | `instant` | Режим обработки явных сохранений и загрузок файлов (`instant` или `dynamic`). |
+| `captureDreaming` | `inherit` | Режим обработки автоматического capture; `inherit` берёт значение `dreaming`. |
+| `captureContext` | `""` | Подсказка извлечения для capture (≤1500 символов); пусто — решает сервер. |
+| `rewriteQuery` | `false` | Сервер переформулирует запрос (+~400 мс). |
 | `allowFileUpload` / `uploadRoots` | `false` / `[]` | Загрузка локальных файлов и разрешённые каталоги. |
 | `maxUploadBytes` | `20971520` | Предел размера файла. |
 | `redactSecrets` | `true` | Вырезать похожие на ключи строки из захвата. |
 | `captureRetries` / `captureRetryDelayMs` | `3` / `4000` | Повторы захвата и базовая задержка (умножается на номер попытки). |
+
+### Что можно спросить
+
+- **«Что я говорил/решал про X?»** — `supermemory_search` по теме, затем
+  `supermemory_memory_history` по id факта, если важна прежняя формулировка.
+- **«Как менялась моя позиция?»** — `supermemory_search` с `includeRelated: true` показывает
+  `updates`/`extends`/`derives` с датами; заменённые и забытые версии видны с `includeForgotten: true`
+  и пометками `superseded`/`forgotten`.
+- **«Какие решения приняты и когда?»** — сохраняйте решения с `date` и
+  `group: {project, kind: "decision"}` и фильтруйте по ним
+  (`{"field":"kind","operator":"eq","value":"decision"}`), а не надейтесь на ранжирование.
+- **«Что мы делали в этом проекте?»** — `supermemory_list` по документам с `sort: "updatedAt"` или
+  поиск с фильтром по группе проекта.
+
+В личном namespace изначально есть только bucket `preferences`. Если хотите раздельно хранить
+решения, состояние проектов и жёсткие ограничения, добавьте buckets один раз (бандл сам серверное
+состояние не меняет):
+
+```text
+supermemory_buckets → action: set, buckets: {"decisions": "Решения владельца и их даты",
+                                            "projects": "Активные проекты и их состояние",
+                                            "constraints": "Жёсткие ограничения и non-goals"}
+```
 
 ### Чтение памяти Гермеса
 
@@ -164,21 +203,41 @@ refs:
 ```bash
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs
-node --test test/
+node --test test/     # 148 случаев; 5 live-случаев пропускаются без временного namespace
 ```
 
 Живая проверка после установки: `supermemory_namespaces` показывает сервер и ваш namespace;
 `supermemory_search` находит сохранённое; после хода в namespace появляется документ. Если данных
 Гермеса ещё нет, поиск про Гермеса законно вернёт пусто.
 
+Опциональный live-набор пишет только во временный namespace `dsh-audit-<YYYYMMDD-HHMM>`, читает
+реальную память из своего `dsh`, чтобы проверить историю, и в конце удаляет временный namespace:
+
+```bash
+DSH_SM_LIVE_CONTAINER=dsh-audit-20260101-1200 \
+SUPERMEMORY_API_KEY="$(cat ~/.supermemory/api-key)" \
+node --test test/live.test.mjs
+```
+
+Любое другое имя namespace отклоняется. Если на self-hosted сервере недоступна модель извлечения
+(в логе `memory agent failed`), документы сохраняются и ищутся как чанки, но новые памяти не
+появляются — зависящие от извлечения проверки честно сообщают об этом, а не «проходят».
+
 ## Архитектура и ограничения
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — recall, capture, части, фильтры, buckets, namespace.
+- [docs/API-COVERAGE.md](docs/API-COVERAGE.md) — какие пути и параметры v5 используются, какие
+  осознанно нет, и где каждый пункт проверяется тестом.
 - [CHANGELOG.md](CHANGELOG.md) — история релизов, включая несовместимые изменения.
 - Capture читает список сообщений сессии: после компакции транскрипт отражает сжатый вид, поэтому
   содержимое частей может перезаписываться (id при этом стабильны).
-- Recall выполняется только на первом шаге хода.
-- Обработка документов асинхронная: сохранённый документ становится доступен для поиска после обработки.
+- Recall выполняется только на первом шаге хода и ограничен бюджетом (`recallMaxChars`,
+  `recallTimeoutMs`); неудачный recall виден в блоке, а не молчит.
+- Обработка документов асинхронная: сохранённый документ становится доступен для поиска после
+  обработки. Памяти (и версии) появляются на второй фазе — «dreaming»: `instant` отдаёт их сразу
+  после обработки и стоит одну дополнительную операцию на документ, `dynamic` группирует связанные
+  документы и может занимать минуты. Для этой фазы self-hosted серверу нужна рабочая модель
+  извлечения; без неё документы сохраняются и ищутся как чанки.
 
 ## Лицензия
 

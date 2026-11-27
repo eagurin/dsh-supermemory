@@ -11,9 +11,19 @@ capture of the finished session.
 - **Recall before a turn.** The latest user question is searched before the first step and the
   matching facts are injected in a per-turn, nonce-delimited block.
 - **Capture after a turn.** The session is upserted as one document (`dsh-<sessionId>`), or as
-  `dsh-<sessionId>-p1…pN` when it exceeds `maxCaptureChars`; parts update in place.
-- **Ten tools**: search, profile, save, forget, read_document, list, namespaces, upload_file,
-  namespace, buckets.
+  `dsh-<sessionId>-p1…pN` when it exceeds `maxCaptureChars`; parts update in place. Each document
+  carries its real date (session start, or the earliest turn of a part) and a context group, so
+  "when did I say this" survives a late or resumed write.
+- **The full v5 read path.** `supermemory_search` exposes the API's `include.related`,
+  `include.documents`, `include.forgotten`, `rerank`, `threshold` and typed `filter`; results carry
+  dates and `superseded` / `inferred` / `forgotten` state instead of bare text.
+- **Memory history.** `supermemory_memory_history` reads one memory by id with its version chain,
+  `extends`/`derives` links, dates, and an optional source-document excerpt — the evolution of a
+  position, not just its latest wording.
+- **Eleven tools**: search, memory_history, profile, save, forget, read_document, list, namespaces,
+  upload_file, namespace, buckets.
+- **Honest recall.** A recall that times out says so in the block (`memory recall unavailable
+  (timeout) — proceed without memory`) instead of silently returning only the profile.
 
 ## Requirements
 
@@ -54,22 +64,22 @@ through DSH itself. Pick one:
 1. **Ask the agent** (works out of the box): tell it to install the bundle
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0
    ```
 
 2. **GUI**: *Plugins → Add plugin*, then paste
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0` into **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0` into **Package name or address**.
 
 3. **CLI** (any machine with Node 22+ and network; the `desktop` profile must already exist, the app
    fully quit, and `pnpm` on `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.7.0"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.8.0"
    ```
 
 The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
 hand. The `scripts/…` commands below run in a checkout of this repository
-(`git clone --branch v0.5.4 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
+(`git clone --branch v0.8.0 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
 the bundle does not create one. A plain `pnpm add` inside the profile installs the package but does **not**
 select it in `dsh.profile.bundles`, so the plugin stays inactive — use one of the
 three paths above.
@@ -128,12 +138,17 @@ falls back to the default below.
 | `searchMode` | `hybrid` | `hybrid`, `memories` or `chunks`. |
 | `threshold` | `0.3` | Minimum relevance. |
 | `rerank` | `none` | `none`, `order` or `aggregate`. |
+| `recallIncludeRelated` | `false` | Carry graph relations (`updates`/`extends`/`derives`) in the automatic recall block; one relation per fact. |
+| `recallRerank` | `inherit` | Reranking for the recall search; `inherit` follows `rerank`. |
+| `recallFailureNotice` | `true` | Put an explicit `memory recall unavailable (…)` line into the recall block when recall fails or times out. |
 | `profileFrequency` | `20` | Inject the profile every N turns; `0` disables. |
 | `profileMaxChars` | `1800` | Character budget for the profile block. |
 | `recallMaxChars` | `6000` | Character budget for the whole recall block. |
 | `recallTimeoutMs` | `10000` | Recall budget; the turn continues without memory when it expires. |
 | `timeoutMs` | `120000` | Timeout for an ordinary API request (a busy local server may need minutes). |
-| `dreaming` | `instant` | Document processing mode (`instant` or `dynamic`). |
+| `dreaming` | `instant` | Processing mode for explicit saves and uploads (`instant` or `dynamic`). |
+| `captureDreaming` | `inherit` | Processing mode for automatic capture; `inherit` follows `dreaming`. |
+| `captureContext` | `""` | Extraction guidance sent with captures (max 1500 chars); empty leaves it to the server. |
 | `captureDebounceMs` | `1200` | Delay before writing a finished turn. |
 | `maxCaptureChars` | `120000` | Largest captured transcript body; bigger sessions are split (the stored document adds a short header). |
 | `captureTurnsPerChunk` | `25` | Turns per part when a session is too large for one document (minimum 1). |
@@ -164,16 +179,44 @@ Cross-agent reads are deliberately off. To recall Hermes' memory (read-only), ad
 
 | Tool | What it does |
 |---|---|
-| `supermemory_search` | Semantic search over readable namespaces; accepts a metadata `filter` and `rewriteQuery`. |
-| `supermemory_profile` | Persistent facts and recent context, optionally with a query. |
-| `supermemory_save` | Store a document in a writable namespace and report the ingest status. |
+| `supermemory_search` | Semantic search over readable namespaces. Accepts a typed metadata `filter`, `threshold`, `rerank`, `rewriteQuery`, and `includeRelated` / `includeForgotten` / `includeDocuments`; results carry dates, state, relation chains and memory ids. |
+| `supermemory_memory_history` | One memory by id: current text, version chain (nearest first), `extends`/`derives` links, dates, `isLatest`/`isInferred`/`isForgotten`, and an optional source-document excerpt. Read-only. |
+| `supermemory_profile` | Persistent facts and recent context, optionally with a query, a metadata `filter`, or selected `buckets`. |
+| `supermemory_save` | Store a document in a writable namespace with an optional `date` and `group`, and report the ingest status. |
 | `supermemory_forget` | Preview matches, then delete by id or description with `confirm: "delete"`. |
 | `supermemory_read_document` | Read a stored document by id with pagination and its status. |
-| `supermemory_list` | List documents or memories, newest first, with status. |
-| `supermemory_namespaces` | Connection check and the namespace inventory (first 100) with counts. |
+| `supermemory_list` | Browse documents, chunks or memories with paging, `sort`/`order`, a metadata `filter`, and forgotten inclusion. |
+| `supermemory_namespaces` | Connection check and the namespace inventory with counts and paging. |
 | `supermemory_upload_file` | Send a local file (PDF, image, text, office) — only inside `uploadRoots`. |
-| `supermemory_namespace` | List namespaces, set `supportingContext`, delete (writable only, `confirm`). |
+| `supermemory_namespace` | List namespaces, show a namespace's `supportingContext`, set it, delete (writable only, `confirm`). |
 | `supermemory_buckets` | List, set and delete profile buckets in your own namespace; deletion needs `confirm: "delete"`. |
+
+## What you can ask it
+
+The point of the read path is that memory answers questions about *time and change*, not
+just similarity. With the tools above the agent can:
+
+- **"What did I say / decide about X?"** — `supermemory_search` with the topic, then
+  `supermemory_memory_history` on a fact's id when the exact earlier wording matters.
+- **"How did my position change?"** — `supermemory_search` with `includeRelated: true` shows
+  `updates` / `extends` / `derives` links with dates; forgotten or replaced versions show up with
+  `includeForgotten: true` and a `superseded`/`forgotten` marker.
+- **"Which decisions were made, and when?"** — save decisions with a `date` and
+  `group: {project, kind: "decision"}` and then filter on them
+  (`{"field":"kind","operator":"eq","value":"decision"}`), sorted by date, instead of hoping
+  semantic search ranks them.
+- **"What did we do in this project?"** — `supermemory_list` over documents with
+  `sort: "updatedAt"`, or a filtered search scoped to the project group.
+
+A personal namespace starts with only the `preferences` bucket. If you want the profile to keep
+decisions, project state and hard constraints separately, add them once (the bundle never changes
+server-side bucket state by itself):
+
+```text
+supermemory_buckets → action: set, buckets: {"decisions": "Decisions the operator made and their dates",
+                                            "projects": "Active projects and their current state",
+                                            "constraints": "Hard constraints and non-goals"}
+```
 
 ## Security model
 
@@ -214,22 +257,46 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-node --test test/           # 100 tests; without the line above, 3 Config tests skip
+node --test test/           # 148 cases (5 live cases skip without a temporary namespace);
+                            # without the line above, 3 Config tests skip
 ```
 
 Live check after install: `supermemory_namespaces` lists the server and your namespace;
 `supermemory_search` finds something you saved; after a turn, a document appears in your namespace.
 If you have no Hermes data yet, a search about Hermes legitimately returns nothing.
 
+The opt-in live suite writes only into a throwaway namespace named `dsh-audit-<YYYYMMDD-HHMM>`,
+reads real memories from your own `dsh` namespace to exercise the history tool, and deletes the
+temporary namespace at the end:
+
+```bash
+DSH_SM_LIVE_CONTAINER=dsh-audit-20260101-1200 \
+SUPERMEMORY_API_KEY="$(cat ~/.supermemory/api-key)" \
+node --test test/live.test.mjs
+```
+
+It refuses any other namespace name. On a self-hosted server whose extraction model is unavailable
+(`memory agent failed` in the server log) documents are written and searchable as chunks but new
+memories do not form; the extraction-dependent checks then report that explicitly instead of
+passing.
+
 ## Architecture and limits
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how recall, capture, chunking, filters, buckets and
   namespaces work (Russian).
+- [docs/API-COVERAGE.md](docs/API-COVERAGE.md) — which v5 paths and parameters are used, which are
+  deliberately not, and the test for each item.
 - [CHANGELOG.md](CHANGELOG.md) — release notes, including breaking changes.
 - Capture uses the message list of the session: after compaction the transcript reflects the
   compacted view, so chunk contents can be rewritten (ids stay stable).
-- Recall runs on the first step of a turn only.
+- Recall runs on the first step of a turn only; it is budgeted (`recallMaxChars`, `recallTimeoutMs`)
+  and a failed recall is reported in the block instead of being silent.
 - Ingest is asynchronous: a saved document becomes searchable after the server processes it.
+  Memories (and therefore version chains) come from a second, "dreaming" phase: with
+  `dreaming: instant` they appear right after processing and cost one extra billed operation per
+  document, while `dynamic` groups related documents for better context and can take minutes. A
+  self-hosted server needs a working extraction model for this phase; without it, documents are
+  still stored and searchable as chunks.
 
 ## License
 
