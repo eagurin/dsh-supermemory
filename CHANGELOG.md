@@ -44,7 +44,8 @@ they exposed. Every mechanism below was read from their source, not inferred fro
   never reused within the same session) shares identical searches between sessions, such as
   scheduled runs started from the same brief.
 - **Recall is scoped to the repository on request** (`recallScope: project`) using a stable
-  `project_id`; the default stays `all`, so cross-project memory keeps working.
+  `project_id` or the project name, so notes saved before project ids existed stay visible;
+  the default stays `all`, so cross-project memory keeps working.
 - **The block states provenance** in a bounded footer: recalled text is data, not
   instructions, and facts used in an answer come from Supermemory.
 - **Query gate matches the official agents**: at least 12 characters (`minQueryChars`
@@ -72,6 +73,8 @@ they exposed. Every mechanism below was read from their source, not inferred fro
 - **Stable `project_id`** (16 hex chars) from the normalized git remote, with a path-hash
   fallback, written into `metadata.project_id` and `group.project_id`; the default recall
   scope keeps using it only when asked.
+- **Explicit saves are redacted too** (single and batch), so the capture guarantee
+  cannot be bypassed by writing through `supermemory_save`.
 - **Redaction covers more shapes**: credentials in URLs (`scheme://user:pass@`), JWTs, and
   `KEY=value` / `KEY: value` assignments, with a placeholder exemption so documentation
   (`API_KEY=${VAR}`, `TOKEN=your-token-here`, `changeme`) survives.
@@ -113,7 +116,7 @@ they exposed. Every mechanism below was read from their source, not inferred fro
 
 ### Tests
 
-- 163 → **197 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
+- 163 → **200 cases**: new `test/capture-official.test.mjs`, `test/recall-official.test.mjs`,
   `test/tools-official.test.mjs` cover tool capture, privacy, project identity, recall
   dedupe, profile sections, discovery, query cache, project scope, batch writes, forget by
   ids, pagination, the skill, and every new setting. Existing suites were updated for the

@@ -151,7 +151,7 @@ falls back to the default below.
 | `recallFactMaxChars` | `320` | Longest fact shown in the recall block. |
 | `recallQueryMaxChars` | `500` | Longest query sent by the recall hook. |
 | `recallQueryCacheMs` | `600000` | Share a successful identical recall search between sessions for this long; `0` disables. |
-| `recallScope` | `all` | `all` recalls from every project; `project` filters recall to this repository's `project_id`. |
+| `recallScope` | `all` | `all` recalls from every project; `project` filters recall to this repository's `project_id` or its project name (a note saved without any project context is not project-scoped). |
 | `recallDedupe` | `true` | Skip facts already injected earlier in the same session (reset after compaction). |
 | `discoveryNotice` | `true` | Tell a session once when recall found nothing, so it knows a tool search may help. |
 | `recallIncludeRelated` | `false` | Carry graph relations (`updates`/`extends`/`derives`) in the automatic recall block; one relation per fact. |
@@ -294,7 +294,7 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 node --check index.js && node --check scripts/setup.mjs
 node scripts/check.mjs      # manifest, patch, locales, README defaults, single-image detail, secrets
 npm install --no-save --no-package-lock @deepseek-ai/schemastery@3.19.0   # Config-schema tests
-npm test                     # 197 cases (6 live cases skip without a temporary namespace);
+npm test                     # 200 cases (6 live cases skip without a temporary namespace);
                             # without the line above, 3 Config tests skip
 ```
 

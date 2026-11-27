@@ -97,6 +97,67 @@ test('save forwards an explicit dreaming mode and explains that facts form later
   }
 })
 
+test('upload works end to end and stamps the project identity', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-upload-'))
+  const file = join(dir, 'note.txt')
+  writeFileSync(file, 'a durable convention worth remembering')
+  let form
+  const host = await createHost({
+    config: { allowFileUpload: true, uploadRoots: [dir] },
+    fetchHandler: (url, init = {}) => {
+      if (init.method === 'POST' && url.endsWith('/document/file')) {
+        form = init.body
+        return { body: { id: 'file-1', status: 'queued' } }
+      }
+      return { body: { system: { status: 'done' } } }
+    },
+  })
+  try {
+    const tool = host.tools.get('supermemory_upload_file')
+    const result = await tool.execute({ path: file, title: 'Note' }, signal())
+    assert.equal(result.documentId, 'file-1')
+    assert.match(result.text, /Uploaded note\.txt/)
+    const metadata = JSON.parse(form.get('metadata'))
+    assert.match(metadata.project_id, /^[0-9a-f]{16}$/)
+    assert.equal(metadata.file_name, 'note.txt')
+    const group = JSON.parse(form.get('group'))
+    assert.equal(group.kind, 'file')
+    assert.match(group.project_id, /^[0-9a-f]{16}$/)
+  } finally {
+    host.restore()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a single save redacts credentials and stamps the project from the execution context', async () => {
+  const writes = []
+  const host = await createHost({
+    fetchHandler: (url, init = {}) => {
+      if (init.method === 'POST' && url.endsWith('/document')) {
+        writes.push(JSON.parse(String(init.body)))
+        return { body: { id: 'dsh-note', status: 'queued' } }
+      }
+      return { body: { system: { status: 'done' } } }
+    },
+  })
+  try {
+    const tool = host.tools.get('supermemory_save')
+    const result = await tool.execute({
+      content: `The staging key is sm_${'B'.repeat(50)} and it must not be stored.`,
+      documentId: 'dsh-note',
+    }, { signal: new AbortController().signal, agent: { session: { header: { cwd: '/Users/dev/private/project' } } } })
+    assert.equal(writes[0].content.includes('sm_BBBB'), false, 'a credential reached the save write')
+    assert.match(result.text, /Stored document dsh-note/)
+    assert.match(writes[0].metadata.project_id, /^[0-9a-f]{16}$/)
+    assert.match(writes[0].group.project_id, /^[0-9a-f]{16}$/)
+  } finally {
+    host.restore()
+  }
+})
+
 test('batch save posts redacted focused documents and reports partial failures', async () => {
   const writes = []
   const host = await createHost({

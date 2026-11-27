@@ -1105,16 +1105,23 @@ async function buildRecall(ctx, settings, query, options = {}) {
       for (const [name, factsInBucket] of Object.entries(profile.buckets)) {
         parts.push([`Profile bucket \`${name}\`:`, factsInBucket])
       }
+      const blockHashes = new Set(facts.filter(fact => fact.container === container).map(fact => factHash(fact.text)))
       const present = parts
-        .map(([heading, list]) => [heading, seen ? list.filter(fact => {
+        .map(([heading, list]) => [heading, list.filter(fact => {
           const hash = factHash(fact)
-          if (seen.has(hash)) {
+          // A profile fact identical to a search hit of this same block would render
+          // twice; the search hit (with date and relations) is the better copy.
+          if (blockHashes.has(hash)) {
             stats.repeats += 1
             return false
           }
-          if (hash) profileAdds.add(hash)
+          if (seen && seen.has(hash)) {
+            stats.repeats += 1
+            return false
+          }
+          if (hash && seen) profileAdds.add(hash)
           return true
-        }) : list])
+        })])
         .filter(([, list]) => list.length > 0)
       const partShare = present.length > 0 ? Math.max(120, Math.floor(profileShare / present.length)) : 0
       for (const [heading, list] of present) {
@@ -1722,6 +1729,19 @@ function normalizeGitRemote(remote) {
 }
 
 /**
+ * Project identity from a tool execution context, when the host supplies the
+ * calling agent's session; otherwise undefined and the caller keeps its own context.
+ * @param {{agent?: {session?: {header?: {cwd?: string}}}}} [exec] - tool execution context.
+ * @returns {{name: string, id: string} | undefined} project identity.
+ */
+function projectFromExec(exec) {
+  const cwd = exec && exec.agent && exec.agent.session && exec.agent.session.header
+    ? exec.agent.session.header.cwd
+    : undefined
+  return typeof cwd === 'string' && cwd.trim() ? projectIdentity(cwd) : undefined
+}
+
+/**
  * Stable project identity for captures: a hash of the normalized git remote (so
  * clones and worktrees of one repository share it) with a path fallback. The raw
  * path never leaves the machine; the short hash is safe to store and filter on.
@@ -2287,6 +2307,7 @@ export const internals = {
   factHash,
   combineFilters,
   projectIdentity,
+  projectFromExec,
   stripPrivate,
   isFullyPrivate,
   stripDataUris,
@@ -2460,8 +2481,16 @@ export function apply(ctx, raw) {
         }
       }
       // `project` keeps recall inside this repository; `all` recalls across projects.
+      // Notes saved before project ids existed, or without a project context, still
+      // carry the human project name, so the scope matches either field.
       const filter = settings.recallScope === 'project'
-        ? combineFilters(settings.filter, { field: 'project_id', operator: 'eq', value: project.id })
+        ? combineFilters(settings.filter, {
+          operator: 'or',
+          operands: [
+            { field: 'project_id', operator: 'eq', value: project.id },
+            { field: 'project', operator: 'eq', value: project.name },
+          ],
+        })
         : settings.filter
       const captureEntry = captureState.get(sessionId)
       const captureNotice = settings.captureFailureNotice
@@ -3122,8 +3151,11 @@ export function apply(ctx, raw) {
       render: (_args, value) => [{ type: 'text', text: value.text }],
     },
     async execute(args, exec) {
-      const content = String(args.content || '').trim()
-      if (content.length < 8) throw new Error('content must be meaningful text')
+      const rawContent = String(args.content || '').trim()
+      if (rawContent.length < 8) throw new Error('content must be meaningful text')
+      // Explicit saves share the capture guarantee: credential shapes never reach
+      // the server unless the operator disabled redaction.
+      const content = redactSecrets(rawContent, settings.redactSecrets !== false)
       // Validate the temporal and grouping arguments before any network I/O.
       const group = normalizeGroup(args.group, 'group')
       let date
@@ -3137,10 +3169,24 @@ export function apply(ctx, raw) {
         ? String(args.documentId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200)
         : `${SOURCE}-${randomUUID()}`
       const metadata = { sm_source: SOURCE, source_agent: 'deepseek-harness', type: 'note', kind: 'note' }
+      const callProject = projectFromExec(exec)
+      let effectiveGroup = group
+      if (callProject) {
+        // The host supplied the calling session, so the write can carry the same
+        // project identity that automatic captures use, even when the caller did
+        // not pass a group; an explicit group value still wins.
+        effectiveGroup = {
+          project: group && typeof group.project === 'string' ? group.project : callProject.name,
+          kind: group && typeof group.kind === 'string' ? group.kind : 'note',
+          ...(group || {}),
+          project_id: group && typeof group.project_id === 'string' ? group.project_id : callProject.id,
+        }
+      }
       // The group isolates context for the server; its project and kind are also
       // copied into metadata so later list filters can select on them directly.
-      if (group && typeof group.project === 'string') metadata.project = group.project
-      if (group && typeof group.kind === 'string') metadata.kind = group.kind
+      if (effectiveGroup && typeof effectiveGroup.project === 'string') metadata.project = effectiveGroup.project
+      if (effectiveGroup && typeof effectiveGroup.kind === 'string') metadata.kind = effectiveGroup.kind
+      if (effectiveGroup && typeof effectiveGroup.project_id === 'string') metadata.project_id = effectiveGroup.project_id
       if (args.title) metadata.title = String(args.title).slice(0, 200)
       const dreaming = args.dreaming === 'instant' || args.dreaming === 'dynamic' ? args.dreaming : settings.dreaming
       await api(ctx, settings, `/ns/${encodeURIComponent(container)}/document`, {
@@ -3152,7 +3198,7 @@ export function apply(ctx, raw) {
           taskType: 'memory',
           dreaming,
           ...(date ? { date } : {}),
-          ...(group ? { group } : {}),
+          ...(effectiveGroup ? { group: effectiveGroup } : {}),
           ...(args.context ? { supportingContext: String(args.context).slice(0, 1500) } : {}),
         },
         signal: exec.signal,
@@ -3237,6 +3283,21 @@ export function apply(ctx, raw) {
         })
       }
       const container = await resolveWriteContainer(args.container)
+      const callProject = projectFromExec(exec)
+      if (callProject) {
+        for (const item of items) {
+          if (item.metadata.project_id) continue
+          item.group = {
+            project: item.group && typeof item.group.project === 'string' ? item.group.project : callProject.name,
+            kind: item.group && typeof item.group.kind === 'string' ? item.group.kind : 'note',
+            ...(item.group || {}),
+            project_id: item.group && typeof item.group.project_id === 'string' ? item.group.project_id : callProject.id,
+          }
+          item.metadata.project_id = item.group.project_id
+          if (item.metadata.project === undefined && typeof item.group.project === 'string') item.metadata.project = item.group.project
+          if (item.metadata.kind === 'note' && typeof item.group.kind === 'string') item.metadata.kind = item.group.kind
+        }
+      }
       const dreaming = args.dreaming === 'instant' || args.dreaming === 'dynamic' ? args.dreaming : settings.dreaming
       const data = await api(ctx, settings, `/ns/${encodeURIComponent(container)}/document/batch`, {
         method: 'POST',
@@ -3574,6 +3635,7 @@ export function apply(ctx, raw) {
       if (!verdict.allowed) throw new Error(verdict.reason)
       const container = await resolveWriteContainer(args.container)
       const buffer = readVerifiedFile(verdict.realPath, settings.maxUploadBytes)
+      const uploadProject = projectIdentity(dirname(verdict.realPath))
       const metadata = {
         sm_source: SOURCE,
         source_agent: 'deepseek-harness',
@@ -3593,7 +3655,6 @@ export function apply(ctx, raw) {
       form.set('taskType', 'memory')
       form.set('dreaming', settings.dreaming)
       form.set('date', new Date().toISOString().slice(0, 10))
-      const uploadProject = projectIdentity(dirname(verdict.realPath))
       form.set('group', JSON.stringify({ project: uploadProject.name, kind: 'file', project_id: uploadProject.id }))
       const data = await apiMultipart(ctx, settings, `/ns/${encodeURIComponent(container)}/document/file`, form, exec.signal)
       const documentId = String((data && data.id) || '')

@@ -88,12 +88,12 @@ equivalent route `/ns`, and 2 are deliberately out of scope for stated reasons:
 |---|---|---|---|---|---|
 | `content` | string | transcript | `content` | file bytes | Redacted (`redactSecrets`) before capture is sent. |
 | `id` | string, ≤255 | `dsh-<sessionId>[-pN]` | `documentId` | server-issued | Stable identity is what makes version chains possible. |
-| `supportingContext` | string ≤1500 | config `captureContext` (empty by default) | `context` | `context` | Extraction guidance; empty means the server decides. |
+| `supportingContext` | string ≤1500 | config `captureContext` (durable guidance by default; `""` disables) | `context` | `context` | Extraction guidance; empty means the server decides. |
 | `metadata` | flat map | `sm_source`, `source_agent`, `type`, `kind`, `project`, `session_id`, `family`, `workspace`, `turns`, `part/parts/from_turn/to_turn`, `chunked` | `type`, `kind`, `project`, `title` | `type`, `kind`, `project`, `file_name`, `bytes`, `title` | The keys a filter can select on: `type`, `kind`, `project`, `session_id`, `source_agent`. |
 | `group` | flat map | `{project, kind}` | `group` argument | `{project, kind: "file"}` | Isolates related context during processing; the project is the workspace directory's base name, never a full path. |
 | `date` | ISO 8601 | session start; per part, its earliest turn | `date` argument (defaults to write time) | upload date | Stored by the server as temporal context (`metadata.temporalContext.documentDate`); the plugin omits it when the timestamp is unknown instead of inventing one. |
 | `taskType` | `memory`, `superrag` | `memory` | `memory` | `memory` | The bundle always wants memories, never retrieval-only documents. |
-| `dreaming` | `dynamic`, `instant` | config `captureDreaming` (inherits `dreaming`, default `instant`) | config `dreaming` | config `dreaming` | `instant` makes facts available right after processing and bills one extra operation per document; `dynamic` groups related documents (better context, facts appear later — measured ~9 minutes on the reference stack). Both `POST` and `PATCH` now send the same value. |
+| `dreaming` | `dynamic`, `instant` | config `captureDreaming` (default `dynamic`; `inherit` follows `dreaming`) | config `dreaming` | config `dreaming` | `instant` makes facts available right after processing and bills one extra operation per document; `dynamic` groups related documents (better context, facts appear later — measured ~9 minutes on the reference stack). Both `POST` and `PATCH` now send the same value. |
 
 Document write `DELETE` (`ids`, 1–100 per call) backs the capture retirement logic and
 is covered by `regressions` (a refused deletion is retried, a shrinking surface never
@@ -146,7 +146,6 @@ not applied automatically.
 ## What is not exposed on purpose
 
 - **`/organization`** — account-wide extraction context affects other agents' memories.
-- **`document/batch`** — bulk import; not agent memory.
 - **`document/file/{id}` (replace file)** — destroys the document history the read path
   now exposes.
 - **`GET /document/{id}?include=chunks,memories`** — the same data is reachable through

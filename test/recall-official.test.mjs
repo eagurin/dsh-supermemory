@@ -257,7 +257,7 @@ test('a successful recall is shared with another session but not reused in the s
   }
 })
 
-test('project scope filters recall to the repository identity', async () => {
+test('project scope matches the project id or the project name so older notes stay visible', async () => {
   const host = await createHost({
     config: { profileFrequency: 0, recallScope: 'project' },
     fetchHandler: url => (url.includes('/search') ? { body: { results: [] } } : { body: {} }),
@@ -265,9 +265,31 @@ test('project scope filters recall to the repository identity', async () => {
   try {
     await runTurn(host, { turn: 1 })
     const body = searchBody(host)
-    assert.equal(body.filter.field, 'project_id')
-    assert.equal(body.filter.operator, 'eq')
-    assert.match(String(body.filter.value), /^[0-9a-f]{16}$/)
+    assert.equal(body.filter.operator, 'or')
+    const byId = body.filter.operands.find(operand => operand.field === 'project_id')
+    const byName = body.filter.operands.find(operand => operand.field === 'project')
+    assert.match(String(byId.value), /^[0-9a-f]{16}$/)
+    assert.equal(byName.operator, 'eq')
+    assert.equal(byName.value, 'project')
+  } finally {
+    host.restore()
+  }
+})
+
+test('a profile fact identical to a search hit of the same block is rendered once', async () => {
+  const duplicate = 'the deploy window is Tuesday morning'
+  const host = await createHost({
+    config: { profileFrequency: 20 },
+    fetchHandler: url => {
+      if (url.includes('/profile')) return { body: { profile: { static: [{ id: 'p1', memory: duplicate }], dynamic: [], buckets: {} } } }
+      if (url.includes('/search')) return { body: { results: [fact(duplicate)] } }
+      return { body: {} }
+    },
+  })
+  try {
+    const { text } = await runTurn(host, { turn: 1 })
+    const occurrences = text.split(duplicate).length - 1
+    assert.equal(occurrences, 1, `the same fact rendered ${occurrences} times`)
   } finally {
     host.restore()
   }

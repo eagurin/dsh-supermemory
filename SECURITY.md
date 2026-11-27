@@ -41,9 +41,12 @@ Does:
 - **Capture only retires documents it wrote.** Deleting a legacy single document requires
   re-reading it and matching this plugin's `session_id` and agent metadata first, so a
   saved note that happens to share the id is left alone.
-- **Captures are redacted.** Credential shapes (`sm_…`, `sk-…`, `ghp_…`, `AKIA…`,
-  `Bearer …`, PEM blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a
-  transcript is sent.
+- **Captures and explicit writes are redacted.** Credential shapes (`sm_…`, `sk-…`,
+  `ghp_…`, `AKIA…`, `Bearer …`, JWTs, URL credentials, `KEY=value`/`KEY: value`
+  assignments, PEM blocks, `"apiKey": "…"`) are replaced with `[redacted]` before a
+  transcript or a `supermemory_save` / `supermemory_save_many` write leaves the process.
+  Documentation placeholders (`${VAR}`, `your-token-here`, `changeme`) are preserved.
+  `<private>…</private>` spans are redacted, and a fully private turn is not captured.
 - **Uploads are off by default**, confined to `uploadRoots`, required to have a single
   hard link, opened with `O_NOFOLLOW` where the platform provides it (Windows falls back
   to a plain open after the link check), and read through that descriptor with a byte cap.
