@@ -26,7 +26,7 @@ test('a session shorter than minCaptureChars is not captured', () => {
   assert.deepEqual(plan.documents, [])
 })
 
-test('a long session is clamped from the tail and marked', () => {
+test('a long session is split into parts instead of clamped at the tail', () => {
   const messages = []
   for (let index = 0; index < 40; index += 1) {
     messages.push(userMessage(`вопрос номер ${index} ${'x'.repeat(120)}`))
@@ -34,11 +34,19 @@ test('a long session is clamped from the tail and marked', () => {
   }
   const plan = buildTranscriptChunks(fakeSession(messages), resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 10, minCaptureChars: 10 }))
   assert.ok(plan.chunked, 'a session over the budget must be chunked')
-  // A chunk keeps its beginning (the user's request) and marks what was dropped.
+  // Split on turn boundaries instead of dropping the tail: every part starts at its
+  // own turn and no part needs the omission marker.
   const first = plan.documents[0].content
   assert.match(first, /\(part \d+\)/)
   assert.match(first, /вопрос номер 0/)
-  assert.match(first, /later content omitted/)
+  assert.equal(first.includes('later content omitted'), false)
+  const joined = plan.documents.map(document => document.content).join('\n')
+  assert.match(joined, /вопрос номер 39/, 'the final human turn must be preserved')
+  for (const document of plan.documents) {
+    assert.ok(document.content.length <= 2000 + 400, `part ${document.documentId} is ${document.content.length} chars`)
+    assert.equal(document.metadata.part >= 1, true)
+    assert.equal(document.metadata.parts, plan.documents.length)
+  }
 })
 
 test('a session without a usable message list does not throw', () => {

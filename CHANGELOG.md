@@ -4,7 +4,36 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.9.0] — 2026-11-28
+## [0.9.1] — 2026-11-28
+
+### Fixed — a large transcript could lose its tail during capture
+
+- **Capture split on turn count only.** A session whose transcript body exceeded
+  `maxCaptureChars` but had fewer human turns than `captureTurnsPerChunk` (default 25) was
+  grouped into a single unit; `renderChunk` then clamped it from the head and dropped the
+  latest turns. The document was still named `…-p1` while `chunked` stayed `false`, so part
+  metadata was absent and nothing pointed at the loss. Found while auditing a real Commerce
+  Platform session (14 turns, 119 888-char part with the final prompt missing).
+- Chunking now applies **both** budgets while cutting on turn boundaries: the turn budget and
+  `maxCaptureChars`. A session that cannot fit one document is split into as many parts as
+  needed; each part stays within the character budget, keeps its own turn range, and carries
+  `chunked/part/parts/from_turn/to_turn` metadata.
+- A **single turn larger than the whole budget** cannot be split on a turn boundary: it stays
+  a legacy single document (`dsh-…`, no fake `-p1` suffix, no part metadata) and is clamped
+  with an explicit `…[later content omitted]` marker.
+- The omission marker is no longer emitted when nothing was dropped: `renderChunk` compared
+  the raw body (including blank separator lines) with the clamped body (blank lines filtered),
+  so structural blank lines alone marked a document as truncated.
+- Regression tests cover the real scenario at both plan level (`test/chunks.test.mjs`) and
+  flush level (`test/integration.test.mjs`).
+
+### Tests
+
+- 212 cases: 206 pass, 6 live skipped (`DSH_SM_LIVE_CONTAINER` + `SUPERMEMORY_API_KEY` gated).
+
+---
+
+# Changelog## [0.9.0] — 2026-11-28
 
 This release adopts the mechanisms the official Supermemory agent integrations use —
 `codex-supermemory`, `claude-supermemory`, `opencode-supermemory`, `openclaw-supermemory`,

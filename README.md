@@ -71,22 +71,22 @@ through DSH itself. Pick one:
 1. **Ask the agent** (works out of the box): tell it to install the bundle
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.9.1
    ```
 
 2. **GUI**: *Plugins → Add plugin*, then paste
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0` into **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.9.1` into **Package name or address**.
 
 3. **CLI** (any machine with Node 22+ and network; the `desktop` profile must already exist, the app
    fully quit, and `pnpm` on `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.9.0"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.9.1"
    ```
 
 The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
 hand. The `scripts/…` commands below run in a checkout of this repository
-(`git clone --branch v0.9.0 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
+(`git clone --branch v0.9.1 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
 the bundle does not create one. A plain `pnpm add` inside the profile installs the package but does **not**
 select it in `dsh.profile.bundles`, so the plugin stays inactive — use one of the
 three paths above.

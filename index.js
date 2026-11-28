@@ -1914,7 +1914,10 @@ function transcriptHeader(session, turns, part) {
 function renderChunk(session, settings, lines, turns, part) {
   const header = transcriptHeader(session, turns, part === undefined ? undefined : String(part))
   const flat = lines.flat().map(line => stripDataUris(line))
-  const raw = flat.join('\n')
+  // Compare against the same non-blank lines clampLines keeps, otherwise structural
+  // blank separators alone would trigger the "later content omitted" marker on a
+  // document that was not truncated at all.
+  const raw = flat.filter(line => line.trim().length > 0).join('\n')
   // Keep the beginning of a chunk: it holds the user's request. A tail clamp used to
   // drop an over-long turn entirely and leave only the answer (or nothing at all).
   let body = clampLines(flat, settings.maxCaptureChars, 'head')
@@ -1981,27 +1984,52 @@ function buildTranscriptChunks(session, settings, options = {}) {
     }
   }
 
-  // Too large for one document: cut on turn boundaries, never mid-turn. The budget
-  // is counted in turns (the setting's unit), so one huge turn cannot drag twenty
-  // short ones into the same part.
+  // Too large for one document: cut on turn boundaries, never mid-turn. Two budgets
+  // apply: `captureTurnsPerChunk` keeps one huge turn from dragging twenty short ones
+  // into the same part, and `maxCaptureChars` keeps a short session with verbose
+  // turns from being written as one group that `renderChunk` would clamp — that
+  // clamp used to drop the session tail silently while the document was still named
+  // `-p1` without part metadata.
   const per = Math.max(1, settings.captureTurnsPerChunk)
+  const maxChars = Math.max(1, Number(settings.maxCaptureChars) || 1)
+  const segmentSize = segment => segment.lines.join('\n').length
   const groups = []
   let bucket = []
   let bucketTurns = 0
+  let bucketChars = 0
+  const closeBucket = () => {
+    if (bucket.length === 0) return
+    groups.push({ segments: bucket, turns: bucketTurns })
+    bucket = []
+    bucketTurns = 0
+    bucketChars = 0
+  }
   for (const segment of segments) {
-    if (bucket.length > 0 && bucketTurns >= per) {
-      groups.push(bucket)
-      bucket = []
-      bucketTurns = 0
-    }
+    const size = segmentSize(segment)
+    const wouldOverflow = bucket.length > 0 && bucketChars + 1 + size > maxChars
+    if (bucket.length > 0 && (bucketTurns >= per || wouldOverflow)) closeBucket()
     bucket.push(segment)
     bucketTurns += segment.turns
+    bucketChars += (bucket.length > 1 ? 1 : 0) + size
   }
-  if (bucket.length > 0) groups.push(bucket)
+  closeBucket()
+  if (groups.length === 1) {
+    // A single turn larger than the whole budget cannot be split on a turn boundary;
+    // keep the legacy single-document identity and let renderChunk clamp it with an
+    // explicit omission marker instead of inventing a `-p1` part.
+    const single = renderChunk(session, settings, groups[0].segments.map(segment => segment.lines), turns)
+    return {
+      documents: [{ documentId: baseId, content: single, metadata: {}, turns, ...(sessionDate ? { date: sessionDate } : {}) }],
+      chunked: false,
+      turns,
+      family,
+      obsolete: [],
+    }
+  }
   let seenTurns = 0
   const documents = groups.map((group, index) => {
     const part = index + 1
-    const groupTurns = group.reduce((total, segment) => total + segment.turns, 0)
+    const groupTurns = group.turns
     const fromTurn = seenTurns + 1
     seenTurns += groupTurns
     // A group made only of a summary or assistant text carries no turn numbers;
@@ -2011,11 +2039,11 @@ function buildTranscriptChunks(session, settings, options = {}) {
     // When that turn's timestamp was never observed (a session resumed after the
     // plugin loaded), only the first part falls back to the observed session start;
     // later parts omit the date instead of all claiming the same moment.
-    const groupAt = group.map(segment => segment.at).filter(value => Number.isFinite(value)).sort((a, b) => a - b)[0]
+    const groupAt = group.segments.map(segment => segment.at).filter(value => Number.isFinite(value)).sort((a, b) => a - b)[0]
     const date = isoOf(groupAt) || (part === 1 ? sessionDate : undefined)
     return {
       documentId: `${baseId}-p${part}`,
-      content: renderChunk(session, settings, group.map(segment => segment.lines), groupTurns, part, groups.length),
+      content: renderChunk(session, settings, group.segments.map(segment => segment.lines), groupTurns, part, groups.length),
       metadata: { part, parts: groups.length, from_turn: fromTurn, to_turn: toTurn },
       turns: groupTurns,
       ...(date ? { date } : {}),

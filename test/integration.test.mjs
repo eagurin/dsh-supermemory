@@ -48,6 +48,39 @@ test('a finished turn is captured as one document with redacted secrets', async 
   }
 })
 
+test('a large transcript with few turns is written as real parts with part metadata', async () => {
+  // Regression for the Commerce Platform capture loss: 4 turns with verbose tool
+  // output exceed maxCaptureChars, but there are fewer turns than captureTurnsPerChunk,
+  // so the old grouper produced one clamped `-p1` document with chunked=false and no
+  // part metadata — the session tail never reached memory.
+  const writes = []
+  const host = await createHost({
+    config: { captureDebounceMs: 10, container: 'dsh', maxCaptureChars: 3000, minCaptureChars: 20 },
+    fetchHandler: (url, init) => {
+      if (init.method === 'POST' && url.endsWith('/document')) {
+        writes.push(JSON.parse(String(init.body || '')))
+        return { body: { id: 'x', status: 'queued' } }
+      }
+      if (init.method === 'PATCH') return { status: 404, body: { error: 'Document not found' } }
+      return { body: {} }
+    },
+  })
+  try {
+    const capture = hook(host, 'session/event')
+    capture.handler(session('session-int-4', 4, 1200), { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    await new Promise(resolve => setTimeout(resolve, flushDelay))
+    assert.ok(writes.length > 1, `expected size-split writes, got ${writes.length}`)
+    for (const [index, document] of writes.entries()) {
+      assert.equal(document.metadata.chunked, true)
+      assert.equal(document.metadata.part, index + 1)
+      assert.equal(document.metadata.parts, writes.length)
+      assert.equal(document.content.includes('later content omitted'), false)
+    }
+  } finally {
+    host.restore()
+  }
+})
+
 test('a long turn is captured as parts and the earlier single document is deleted', async () => {
   const writes = []
   const deletes = []

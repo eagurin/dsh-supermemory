@@ -82,3 +82,32 @@ test('a session below minCaptureChars produces nothing', () => {
   const plan = buildTranscriptChunks(fakeSession([userMessage('ок')]), resolveSettings({ minCaptureChars: 500 }))
   assert.deepEqual(plan.documents, [])
 })
+
+test('a large transcript with few turns is split by size instead of clipped', () => {
+  // Reproduces the capture loss found in a real Commerce Platform session: the raw
+  // transcript exceeds maxCaptureChars, but it has fewer human turns than
+  // captureTurnsPerChunk, so the turn-only grouper built one group and the tail was
+  // clamped away while the document was named `-p1` without part metadata.
+  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 25, minCaptureChars: 10 })
+  const plan = buildTranscriptChunks(sessionWith(4, 600), settings)
+  assert.equal(plan.chunked, true)
+  assert.ok(plan.documents.length > 1, `expected more than one part, got ${plan.documents.length}`)
+  for (const document of plan.documents) {
+    assert.equal(document.metadata.part >= 1, true)
+    assert.equal(document.metadata.parts, plan.documents.length)
+    assert.ok(document.content.length <= 2000 + 400, `part ${document.documentId} is ${document.content.length} chars`)
+  }
+  const joined = plan.documents.map(document => document.content).join('\n')
+  assert.match(joined, /вопрос 3/, 'the last human turn must survive the capture')
+  assert.ok(!joined.includes('later content omitted'), 'multi-turn content must be split, not clipped')
+})
+
+test('a single oversize turn stays one document without a fake part suffix', () => {
+  const settings = resolveSettings({ maxCaptureChars: 2000, captureTurnsPerChunk: 25, minCaptureChars: 10 })
+  const plan = buildTranscriptChunks(sessionWith(1, 4000), settings)
+  assert.equal(plan.chunked, false)
+  assert.equal(plan.documents.length, 1)
+  assert.equal(plan.documents[0].documentId, 'dsh-session-test')
+  assert.deepEqual(plan.documents[0].metadata, {})
+  assert.match(plan.documents[0].content, /later content omitted/)
+})
