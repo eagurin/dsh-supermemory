@@ -4,6 +4,20 @@ All notable changes to this bundle are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] — 2026-11-28
+
+### Changed — recall timeout raised to cover server snapshots
+
+- `recallTimeoutMs` default is now **30000 ms** (ceiling stays 60000, floor 250). The local
+  self-hosted server serializes its whole encrypted store on every snapshot (665 MB, 40–72 s
+  measured) and HTTP stalls meanwhile; with a 10 s budget that produced **3 empty recalls out
+  of 51** root-session turns (~6%) in a Commerce Platform audit, each turn continuing without
+  memory. The recall path still uses one shared deadline, so the worst case is a 30 s delay
+  on a stalled server, not a 30 s budget per request.
+- No other behaviour changes; 212 tests, 206 pass, 6 live skipped.
+
+---
+
 ## [0.9.1] — 2026-11-28
 
 ### Fixed — a large transcript could lose its tail during capture

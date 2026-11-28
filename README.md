@@ -71,22 +71,22 @@ through DSH itself. Pick one:
 1. **Ask the agent** (works out of the box): tell it to install the bundle
 
    ```
-   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.9.1
+   plugin_manager install_bundle → git+https://github.com/eagurin/dsh-supermemory.git#v0.9.2
    ```
 
 2. **GUI**: *Plugins → Add plugin*, then paste
-   `git+https://github.com/eagurin/dsh-supermemory.git#v0.9.1` into **Package name or address**.
+   `git+https://github.com/eagurin/dsh-supermemory.git#v0.9.2` into **Package name or address**.
 
 3. **CLI** (any machine with Node 22+ and network; the `desktop` profile must already exist, the app
    fully quit, and `pnpm` on `PATH`):
 
    ```bash
-   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.9.1"
+   npx @deepseek-ai/dsh plugin --profile desktop add "git+https://github.com/eagurin/dsh-supermemory.git#v0.9.2"
    ```
 
 The bundle inserts its own `cordis.patch.yml`, so no profile row has to be written by
 hand. The `scripts/…` commands below run in a checkout of this repository
-(`git clone --branch v0.9.1 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
+(`git clone --branch v0.9.2 --depth 1 https://github.com/eagurin/dsh-supermemory.git`); installing
 the bundle does not create one. A plain `pnpm add` inside the profile installs the package but does **not**
 select it in `dsh.profile.bundles`, so the plugin stays inactive — use one of the
 three paths above.
@@ -160,7 +160,7 @@ falls back to the default below.
 | `profileFrequency` | `20` | Inject the profile every N turns; `0` disables. |
 | `profileMaxChars` | `1800` | Character budget for the profile block. |
 | `recallMaxChars` | `6000` | Character budget for the whole recall block. |
-| `recallTimeoutMs` | `10000` | Recall budget; the turn continues without memory when it expires. |
+| `recallTimeoutMs` | `30000` | Recall budget; the turn continues without memory when it expires. Raised from 10 s because a store snapshot stalls HTTP for 40–72 s and was producing ~6% empty recalls. |
 | `timeoutMs` | `120000` | Timeout for an ordinary API request (a busy local server may need minutes). |
 | `dreaming` | `instant` | Processing mode for explicit saves and uploads (`instant` or `dynamic`). |
 | `captureDreaming` | `dynamic` | Processing mode for automatic capture; `inherit` follows `dreaming`. `dynamic` groups related captures (better memories, facts appear later), `instant` is immediate and bills an extra operation per document. |

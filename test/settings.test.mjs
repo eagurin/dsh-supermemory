@@ -13,7 +13,7 @@ test('defaults are complete and stable', () => {
   // The local server spikes past 8 s while it works through an embedding backlog
   // (measured 28.5 s), and a single slow search used to fail the whole tool call.
   assert.equal(settings.timeoutMs, 120000)
-  assert.equal(settings.recallTimeoutMs, 10000)
+  assert.equal(settings.recallTimeoutMs, 30000)
   assert.equal(Object.keys(DEFAULTS).length, CONFIG_KEYS.length)
 })
 
